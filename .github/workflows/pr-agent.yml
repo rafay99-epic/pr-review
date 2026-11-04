@@ -1,11 +1,10 @@
-# Reusable PR-Agent review, powered by GLM-5.3 Flash through Command Code's
-# OpenAI-compatible provider API. Repos opt in with the caller in caller.yml;
-# every model/tool setting lives here so one edit updates all repos.
+# Reusable PR-Agent review: DeepSeek V4.1 Flash Fast (GLM-5.3 Flash fallback) through
+# Command Code's OpenAI-compatible provider API. Repos opt in with the caller in
+# caller.yml; every model/tool setting lives here so one edit updates all repos.
 #
 # Runs only on open PRs authored by the repo owner (rafay99-epic or SyntaxLabTechnology)
 # and on their /commands. Never on merge or main. /review and /improve run as parallel
-# jobs: the upstream model is slow (~5 tokens/s), so running them back to back doubles
-# the wait.
+# jobs, so the wait is the slower of the two, not both added up.
 name: pr-agent
 
 on:
@@ -19,16 +18,22 @@ env:
   GITHUB_TOKEN: ${{ github.token }}
 
   # Model: Command Code provider API, billed against plan credits.
+  # Benchmarked 2026-11-04 on a real 17k-token diff: DeepSeek V4.1 Flash Fast at low
+  # effort answered in 55-60s with a 2s first token. GLM-5.3 Flash found the same issues
+  # but its discounted tier queues for up to 93s before the first token, so it is only
+  # the fallback. Low effort cuts thinking tokens ~5x without losing findings.
   OPENAI_KEY: ${{ secrets.CMD_API_KEY }}
   OPENAI.API_BASE: https://api.commandcode.ai/provider/v1
-  config.model: openai/z-ai/glm-5.3-flash
-  config.fallback_models: "[]"
+  config.model: openai/deepseek/deepseek-v4.1-flash-fast
+  config.fallback_models: '["openai/z-ai/glm-5.3-flash"]'
+  config.reasoning_effort: low
+  config.additional_reasoning_effort_models: '["openai/deepseek/deepseek-v4.1-flash-fast", "openai/z-ai/glm-5.3-flash"]'
   config.custom_model_max_tokens: "128000"
   config.max_model_tokens: "128000"
 
-  # A slow call that is still generating gets 5 min to finish. A call that times out
-  # is not restarted from scratch, which is what used to burn the whole job.
-  config.ai_timeout: "300"
+  # A call gets 3 min (normal is ~1 min). A timed-out call goes straight to the
+  # fallback model instead of restarting on the same one.
+  config.ai_timeout: "180"
   config.num_retries: "1"
   config.retry_same_model_on_timeout: "false"
 
@@ -69,7 +74,7 @@ jobs:
         && github.event.comment.user.login == github.repository_owner
         && startsWith(github.event.comment.body, '/'))
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: docker://pragent/pr-agent:0.49.0-github_action
         env:
@@ -84,7 +89,7 @@ jobs:
         && github.event.pull_request.user.login == github.repository_owner
         && !github.event.pull_request.draft
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: docker://pragent/pr-agent:0.49.0-github_action
         env:

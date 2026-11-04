@@ -1,6 +1,6 @@
 # pr-review
 
-PR-Agent reviews on my PRs, running GLM-5.3 Flash through Command Code's provider API.
+PR-Agent reviews on my PRs, running DeepSeek V4.1 Flash Fast (GLM-5.3 Flash fallback) through Command Code's provider API.
 
 All settings are in `.github/workflows/pr-agent.yml`. Each repo only carries `caller.yml`.
 
@@ -24,4 +24,4 @@ Only PRs opened by the repo owner, and owner comments starting with `/`, trigger
 
 ## Cost
 
-GLM-5.3 Flash is $0.15 in / $0.50 out per 1M tokens. A typical PR (20k tokens in, 2k out, review + improve) costs about $0.01.
+DeepSeek V4.1 Flash Fast is $0.16 in / $0.58 out per 1M tokens off-peak ($0.32 / $1.16 peak). A typical PR (review + improve) costs about $0.02-0.04. Each review takes about 1-2 minutes.
