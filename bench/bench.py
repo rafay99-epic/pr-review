@@ -93,8 +93,15 @@ def run(name, extra, trial):
               f"reasoning={r['reasoning']} chars={r['chars']} err={r['error']}", flush=True)
 
 
+def run_trials(name, extra):
+    # Trials of one model run back to back so it never queues behind itself;
+    # different models still run in parallel to keep the whole bench short.
+    for trial in range(1, RUNS + 1):
+        run(name, extra, trial)
+
+
 open(sys.argv[3] + "l", "w").close()  # start each run with an empty results.jsonl
-threads = [threading.Thread(target=run, args=(n, e, t)) for t in range(1, RUNS + 1) for n, e in VARIANTS]
+threads = [threading.Thread(target=run_trials, args=(n, e)) for n, e in VARIANTS]
 for th in threads:
     th.start()
 for th in threads:

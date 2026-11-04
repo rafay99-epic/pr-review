@@ -1,5 +1,5 @@
 # Reviews this repo's own PRs with the shared workflow, so config changes get tested here first.
-name: pr-agent
+name: self-review
 
 on:
   pull_request:
@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   review:
-    uses: rafay99-epic/pr-review/.github/workflows/pr-agent.yml@main
+    # Local path, not @main: a PR that edits the shared workflow is reviewed by its own version.
+    uses: ./.github/workflows/pr-agent.yml
     secrets:
       CMD_API_KEY: ${{ secrets.CMD_API_KEY }}
