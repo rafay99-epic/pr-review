@@ -33,7 +33,12 @@ VARIANTS = [
 ]
 # Optional 4th arg: comma-separated variant names to run.
 if len(sys.argv) > 4:
-    VARIANTS = [v for v in VARIANTS if v[0] in sys.argv[4].split(",")]
+    wanted = sys.argv[4].split(",")
+    unknown = set(wanted) - {n for n, _ in VARIANTS}
+    if unknown:
+        sys.exit(f"unknown variant(s): {', '.join(sorted(unknown))}. "
+                 f"Known: {', '.join(n for n, _ in VARIANTS)}")
+    VARIANTS = [v for v in VARIANTS if v[0] in wanted]
 RUNS = 2
 results = []
 lock = threading.Lock()
@@ -93,15 +98,20 @@ def run(name, extra, trial):
               f"reasoning={r['reasoning']} chars={r['chars']} err={r['error']}", flush=True)
 
 
-def run_trials(name, extra):
-    # Trials of one model run back to back so it never queues behind itself;
-    # different models still run in parallel to keep the whole bench short.
-    for trial in range(1, RUNS + 1):
-        run(name, extra, trial)
+def run_model(variants):
+    # Every request to one model (all its variants and trials) runs back to back, so a
+    # model never queues behind itself. Different models still run in parallel.
+    for name, extra in variants:
+        for trial in range(1, RUNS + 1):
+            run(name, extra, trial)
 
+
+by_model = {}
+for name, extra in VARIANTS:
+    by_model.setdefault(extra["model"], []).append((name, extra))
 
 open(sys.argv[3] + "l", "w").close()  # start each run with an empty results.jsonl
-threads = [threading.Thread(target=run_trials, args=(n, e)) for n, e in VARIANTS]
+threads = [threading.Thread(target=run_model, args=(vs,)) for vs in by_model.values()]
 for th in threads:
     th.start()
 for th in threads:
