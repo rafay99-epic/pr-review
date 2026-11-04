@@ -1,6 +1,11 @@
 # Reusable PR-Agent review, powered by GLM-5.3 Flash through Command Code's
-# OpenAI-compatible provider API. Repos opt in with the 15-line caller in
-# caller.yml; every model/tool setting lives here so one edit updates all repos.
+# OpenAI-compatible provider API. Repos opt in with the caller in caller.yml;
+# every model/tool setting lives here so one edit updates all repos.
+#
+# Runs only on open PRs authored by the repo owner (rafay99-epic or SyntaxLabTechnology)
+# and on their /commands. Never on merge or main. /review and /improve run as parallel
+# jobs: the upstream model is slow (~5 tokens/s), so running them back to back doubles
+# the wait.
 name: pr-agent
 
 on:
@@ -9,58 +14,80 @@ on:
       CMD_API_KEY:
         required: true
 
+# Shared by both jobs. Each job only sets which tool it runs.
+env:
+  GITHUB_TOKEN: ${{ github.token }}
+
+  # Model: Command Code provider API, billed against plan credits.
+  OPENAI_KEY: ${{ secrets.CMD_API_KEY }}
+  OPENAI.API_BASE: https://api.commandcode.ai/provider/v1
+  config.model: openai/z-ai/glm-5.3-flash
+  config.fallback_models: "[]"
+  config.custom_model_max_tokens: "128000"
+  config.max_model_tokens: "128000"
+
+  # A slow call that is still generating gets 5 min to finish. A call that times out
+  # is not restarted from scratch, which is what used to burn the whole job.
+  config.ai_timeout: "300"
+  config.num_retries: "1"
+  config.retry_same_model_on_timeout: "false"
+
+  # Describe is off so my PR bodies stay mine.
+  github_action_config.auto_describe: "false"
+  github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
+  github_action_config.handle_push_trigger: "true"
+
+  # CodeRabbit-style output: each finding is an inline comment on its line, each fix
+  # is a one-click committable suggestion. Summary comments are edited in place and
+  # inline comments are fingerprinted, so a push never re-posts the same finding.
+  pr_reviewer.persistent_comment: "true"
+  config.persistent_inline_comments: "true"
+  pr_reviewer.inline_key_issues: "true"
+  pr_code_suggestions.committable_code_suggestions: "true"
+  pr_code_suggestions.suggestions_score_threshold: "6"
+
+  pr_reviewer.num_max_findings: "8"
+  pr_reviewer.require_tests_review: "false"
+  pr_reviewer.extra_instructions: &focus >-
+    Look for: logic bugs and unhandled edge cases; security holes (injection, XSS,
+    missing auth or ownership checks, leaked secrets); type-safety gaps; and in UI code,
+    accessibility (semantic elements, labels, alt text, keyboard and focus) and missing
+    loading, error, and empty states.
+    Skip style nits and formatting. If unsure a finding is real, leave it out.
+  pr_code_suggestions.extra_instructions: *focus
+
 jobs:
+  # Inline findings on open/push, plus every /command typed on the PR.
   review:
-    # Only PRs and comments from the repo owner (rafay99-epic or SyntaxLabTechnology).
-    # Keeps strangers and dependabot from spending credits.
     if: >-
       (github.event_name == 'pull_request'
         && github.event.pull_request.user.login == github.repository_owner
         && !github.event.pull_request.draft)
       || (github.event_name == 'issue_comment'
         && github.event.issue.pull_request
+        && github.event.issue.state == 'open'
         && github.event.comment.user.login == github.repository_owner
         && startsWith(github.event.comment.body, '/'))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: docker://pragent/pr-agent:0.49.0-github_action
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-          # Model: Command Code provider API, billed against plan credits.
-          OPENAI_KEY: ${{ secrets.CMD_API_KEY }}
-          OPENAI.API_BASE: https://api.commandcode.ai/provider/v1
-          config.model: openai/z-ai/glm-5.3-flash
-          config.fallback_models: "[]"
-          config.custom_model_max_tokens: "128000"
-          config.max_model_tokens: "128000"
-
-          # Tools: review + code suggestions. Describe is off so my PR bodies stay mine.
           github_action_config.auto_review: "true"
+          github_action_config.auto_improve: "false"
+          github_action_config.push_commands: '["/review"]'
+
+  # Committable suggestions on open/push. Comments go to the review job only.
+  improve:
+    if: >-
+      github.event_name == 'pull_request'
+        && github.event.pull_request.user.login == github.repository_owner
+        && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: docker://pragent/pr-agent:0.49.0-github_action
+        env:
+          github_action_config.auto_review: "false"
           github_action_config.auto_improve: "true"
-          github_action_config.auto_describe: "false"
-          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
-
-          # Re-run both on every push. Summary comment is edited in place, and inline
-          # comments are fingerprinted so a push never re-posts the same finding.
-          github_action_config.handle_push_trigger: "true"
-          github_action_config.push_commands: '["/review", "/improve"]'
-          pr_reviewer.persistent_comment: "true"
-          config.persistent_inline_comments: "true"
-
-          # CodeRabbit-style output: each finding is an inline comment on its line,
-          # each fix is a one-click committable suggestion instead of a table row.
-          pr_reviewer.inline_key_issues: "true"
-          pr_code_suggestions.committable_code_suggestions: "true"
-          pr_code_suggestions.suggestions_score_threshold: "6"
-
-          pr_reviewer.num_max_findings: "8"
-          pr_reviewer.require_tests_review: "false"
-          pr_reviewer.extra_instructions: &focus >-
-            Look for: logic bugs and unhandled edge cases; security holes (injection, XSS,
-            missing auth or ownership checks, leaked secrets); type-safety gaps; and in UI code,
-            accessibility (semantic elements, labels, alt text, keyboard and focus) and missing
-            loading, error, and empty states.
-            Skip style nits and formatting. If unsure a finding is real, leave it out.
-          pr_code_suggestions.extra_instructions: *focus
+          github_action_config.push_commands: '["/improve"]'
