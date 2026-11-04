@@ -11,7 +11,7 @@ gh secret set CMD_API_KEY -R rafay99-epic/<repo>        # key from commandcode.a
 cp caller.yml ~/code/<repo>/.github/workflows/pr-agent.yml
 ```
 
-Findings land as inline comments on the changed lines, fixes as one-click committable suggestions, plus one summary comment. All re-run on each push without re-posting old findings.
+Only `/review` runs automatically: findings land as inline comments on the changed lines, plus one summary comment, re-run on each push without re-posting old findings. Comment `/improve` for one-click committable fixes.
 
 ## Commands (comment on the PR)
 
@@ -24,4 +24,4 @@ Only PRs opened by the repo owner, and owner comments starting with `/`, trigger
 
 ## Cost
 
-DeepSeek V4.1 Flash Fast is $0.16 in / $0.58 out per 1M tokens off-peak ($0.32 / $1.16 peak). A typical PR (review + improve) costs about $0.02-0.04. Each review takes about 1-2 minutes.
+DeepSeek V4.1 Flash Fast is $0.16 in / $0.58 out per 1M tokens off-peak ($0.32 / $1.16 peak). A typical review costs about $0.01-0.02 and takes about 1-2 minutes.
