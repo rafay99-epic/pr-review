@@ -11,7 +11,7 @@ gh secret set CMD_API_KEY -R rafay99-epic/<repo>        # key from commandcode.a
 cp caller.yml ~/code/<repo>/.github/workflows/pr-agent.yml
 ```
 
-Commit the caller and open a PR. Review shows up as one comment, updated on each push.
+Findings land as inline comments on the changed lines, fixes as one-click committable suggestions, plus one summary comment. All re-run on each push without re-posting old findings.
 
 ## Commands (comment on the PR)
 

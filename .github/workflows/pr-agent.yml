@@ -42,13 +42,25 @@ jobs:
           github_action_config.auto_describe: "false"
           github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
 
-          # Re-review on every push, editing the same comment instead of stacking new ones.
+          # Re-run both on every push. Summary comment is edited in place, and inline
+          # comments are fingerprinted so a push never re-posts the same finding.
           github_action_config.handle_push_trigger: "true"
-          github_action_config.push_commands: '["/review"]'
+          github_action_config.push_commands: '["/review", "/improve"]'
           pr_reviewer.persistent_comment: "true"
+          config.persistent_inline_comments: "true"
 
-          pr_reviewer.num_max_findings: "6"
+          # CodeRabbit-style output: each finding is an inline comment on its line,
+          # each fix is a one-click committable suggestion instead of a table row.
+          pr_reviewer.inline_key_issues: "true"
+          pr_code_suggestions.committable_code_suggestions: "true"
+          pr_code_suggestions.suggestions_score_threshold: "6"
+
+          pr_reviewer.num_max_findings: "8"
           pr_reviewer.require_tests_review: "false"
-          pr_reviewer.extra_instructions: >-
-            Report real bugs, security holes, and type-safety gaps.
+          pr_reviewer.extra_instructions: &focus >-
+            Look for: logic bugs and unhandled edge cases; security holes (injection, XSS,
+            missing auth or ownership checks, leaked secrets); type-safety gaps; and in UI code,
+            accessibility (semantic elements, labels, alt text, keyboard and focus) and missing
+            loading, error, and empty states.
             Skip style nits and formatting. If unsure a finding is real, leave it out.
+          pr_code_suggestions.extra_instructions: *focus
