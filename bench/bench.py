@@ -93,6 +93,7 @@ def run(name, extra, trial):
               f"reasoning={r['reasoning']} chars={r['chars']} err={r['error']}", flush=True)
 
 
+open(sys.argv[3] + "l", "w").close()  # start each run with an empty results.jsonl
 threads = [threading.Thread(target=run, args=(n, e, t)) for t in range(1, RUNS + 1) for n, e in VARIANTS]
 for th in threads:
     th.start()
