@@ -3,8 +3,8 @@
 # caller.yml; every model/tool setting lives here so one edit updates all repos.
 #
 # Runs only on open PRs authored by the repo owner (rafay99-epic or SyntaxLabTechnology)
-# and on their /commands. Never on merge or main. /review and /improve run as parallel
-# jobs, so the wait is the slower of the two, not both added up.
+# and on their /commands. Never on merge or main. Only /review runs automatically
+# (inline findings, ~1-2 min); /improve runs only when commented on the PR.
 name: pr-agent
 
 on:
@@ -37,14 +37,17 @@ env:
   config.num_retries: "1"
   config.retry_same_model_on_timeout: "false"
 
-  # Describe is off so my PR bodies stay mine.
+  # Only /review runs on open and push. Describe is off so my PR bodies stay mine.
+  github_action_config.auto_review: "true"
+  github_action_config.auto_improve: "false"
   github_action_config.auto_describe: "false"
+  github_action_config.push_commands: '["/review"]'
   github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
   github_action_config.handle_push_trigger: "true"
 
-  # CodeRabbit-style output: each finding is an inline comment on its line, each fix
-  # is a one-click committable suggestion. Summary comments are edited in place and
-  # inline comments are fingerprinted, so a push never re-posts the same finding.
+  # CodeRabbit-style output: each finding is an inline comment on its line. Summary
+  # comments are edited in place and inline comments are fingerprinted, so a push never
+  # re-posts the same finding. A commented /improve posts one-click committable fixes.
   pr_reviewer.persistent_comment: "true"
   config.persistent_inline_comments: "true"
   pr_reviewer.inline_key_issues: "true"
@@ -77,22 +80,3 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: docker://pragent/pr-agent:0.49.0-github_action
-        env:
-          github_action_config.auto_review: "true"
-          github_action_config.auto_improve: "false"
-          github_action_config.push_commands: '["/review"]'
-
-  # Committable suggestions on open/push. Comments go to the review job only.
-  improve:
-    if: >-
-      github.event_name == 'pull_request'
-        && github.event.pull_request.user.login == github.repository_owner
-        && !github.event.pull_request.draft
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: docker://pragent/pr-agent:0.49.0-github_action
-        env:
-          github_action_config.auto_review: "false"
-          github_action_config.auto_improve: "true"
-          github_action_config.push_commands: '["/improve"]'
