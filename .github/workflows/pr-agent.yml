@@ -85,7 +85,7 @@ jobs:
         timeout-minutes: 4
         continue-on-error: true
         env:
-          config.model: openai/deepseek/deepseek-v4.1-flash-fast
+          config.model: openai/gpt-5.4-mini
           pr_reviewer.publish_review_failure_comment: "false"
 
       # Fallback: GLM-5.3 Flash, only when DeepSeek failed. If this fails too, the job is red.
