@@ -1,0 +1,54 @@
+# Reusable PR-Agent review, powered by GLM-5.3 Flash through Command Code's
+# OpenAI-compatible provider API. Repos opt in with the 15-line caller in
+# caller.yml; every model/tool setting lives here so one edit updates all repos.
+name: pr-agent
+
+on:
+  workflow_call:
+    secrets:
+      CMD_API_KEY:
+        required: true
+
+jobs:
+  review:
+    # Only PRs and comments from the repo owner (rafay99-epic or SyntaxLabTechnology).
+    # Keeps strangers and dependabot from spending credits.
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.user.login == github.repository_owner
+        && !github.event.pull_request.draft)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.login == github.repository_owner
+        && startsWith(github.event.comment.body, '/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: docker://pragent/pr-agent:0.49.0-github_action
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+          # Model: Command Code provider API, billed against plan credits.
+          OPENAI_KEY: ${{ secrets.CMD_API_KEY }}
+          OPENAI.API_BASE: https://api.commandcode.ai/provider/v1
+          config.model: openai/z-ai/glm-5.3-flash
+          config.fallback_models: "[]"
+          config.custom_model_max_tokens: "128000"
+          config.max_model_tokens: "128000"
+
+          # Tools: review + code suggestions. Describe is off so my PR bodies stay mine.
+          github_action_config.auto_review: "true"
+          github_action_config.auto_improve: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
+
+          # Re-review on every push, editing the same comment instead of stacking new ones.
+          github_action_config.handle_push_trigger: "true"
+          github_action_config.push_commands: '["/review"]'
+          pr_reviewer.persistent_comment: "true"
+
+          pr_reviewer.num_max_findings: "6"
+          pr_reviewer.require_tests_review: "false"
+          pr_reviewer.extra_instructions: >-
+            Report real bugs, security holes, and type-safety gaps.
+            Skip style nits and formatting. If unsure a finding is real, leave it out.
