@@ -13,28 +13,27 @@ on:
       CMD_API_KEY:
         required: true
 
-# Shared by both jobs. Each job only sets which tool it runs.
 env:
   GITHUB_TOKEN: ${{ github.token }}
 
-  # Model: Command Code provider API, billed against plan credits.
-  # Benchmarked 2026-11-04 on a real 17k-token diff: DeepSeek V4.1 Flash Fast at low
-  # effort answered in 55-60s with a 2s first token. GLM-5.3 Flash found the same issues
-  # but its discounted tier queues for up to 93s before the first token, so it is only
-  # the fallback. Low effort cuts thinking tokens ~5x without losing findings.
+  # Model: Command Code provider API, billed against plan credits. The model itself is
+  # picked per step below. Benchmarked 2026-11-04 on a real 17k-token diff: DeepSeek V4.1
+  # Flash Fast at low effort answered in 55-60s with a 2s first token. GLM-5.3 Flash found
+  # the same issues but its discounted tier queues for up to 93s, so it is the fallback.
+  # Low effort cuts thinking tokens ~5x without losing findings.
   OPENAI_KEY: ${{ secrets.CMD_API_KEY }}
   OPENAI.API_BASE: https://api.commandcode.ai/provider/v1
-  config.model: openai/deepseek/deepseek-v4.1-flash-fast
-  config.fallback_models: '["openai/z-ai/glm-5.3-flash"]'
+  config.fallback_models: "[]"
   config.reasoning_effort: low
   config.additional_reasoning_effort_models: '["openai/deepseek/deepseek-v4.1-flash-fast", "openai/z-ai/glm-5.3-flash"]'
   config.custom_model_max_tokens: "128000"
   config.max_model_tokens: "128000"
 
-  # A call gets 3 min (normal is ~1 min). A timed-out call goes straight to the
-  # fallback model instead of restarting on the same one.
+  # No LiteLLM retries. PR-Agent still retries a failed call once on its own (hardcoded
+  # MODEL_RETRIES=2), and ai_timeout is not a hard wall: on 2026-11-04 a dead upstream held
+  # one review for 12 min across 4 attempts. The real limit is each step's timeout-minutes.
   config.ai_timeout: "180"
-  config.num_retries: "1"
+  config.num_retries: "0"
   config.retry_same_model_on_timeout: "false"
 
   # Only /review runs on open and push. Describe is off so my PR bodies stay mine.
@@ -79,4 +78,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: docker://pragent/pr-agent:0.49.0-github_action
+      # Primary: DeepSeek, hard-killed at 4 min (normal is 1-2 min). A failed or
+      # timed-out review exits non-zero, so the fallback step below takes over.
+      - id: primary
+        uses: docker://pragent/pr-agent:0.49.0-github_action
+        timeout-minutes: 4
+        continue-on-error: true
+        env:
+          config.model: openai/deepseek/deepseek-v4.1-flash-fast
+          pr_reviewer.publish_review_failure_comment: "false"
+
+      # Fallback: GLM-5.3 Flash, only when DeepSeek failed. If this fails too, the job is red.
+      - if: steps.primary.outcome == 'failure'
+        uses: docker://pragent/pr-agent:0.49.0-github_action
+        timeout-minutes: 5
+        env:
+          config.model: openai/z-ai/glm-5.3-flash
