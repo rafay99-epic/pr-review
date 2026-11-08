@@ -1,0 +1,311 @@
+// The two passes. Find: one agent reads the diff, pulls whatever context it needs and lists
+// candidate defects. Verify: a fresh agent per candidate tries to disprove it against the
+// code, and only what survives is posted.
+
+import { type } from "arktype";
+import type { Submit } from "./agent.ts";
+import { runAgent } from "./agent.ts";
+import type { Config, Rule } from "./config.ts";
+import type { FileDiff } from "./diff.ts";
+import type { Llm } from "./llm.ts";
+import { bySeverity } from "./render.ts";
+import { type Finding, SEVERITIES, type Severity, type Tracked } from "./state.ts";
+
+const Severity = type.enumerated(...SEVERITIES);
+
+const Candidate = type({
+  file: "string > 0",
+  line: "number.integer > 0",
+  "end_line?": "number.integer > 0",
+  severity: Severity,
+  title: "string > 0",
+  body: "string > 0",
+  evidence: "string[] > 0",
+  "rule?": "string",
+});
+
+const Findings = type({ checked_files: "string[]", findings: Candidate.array() });
+
+const Verdict = type({
+  verdict: "'confirmed' | 'rejected'",
+  reason: "string > 0",
+  evidence: "string[]",
+  severity: Severity,
+  "title?": "string",
+  "body?": "string",
+});
+
+const candidateSchema = {
+  type: "object",
+  properties: {
+    file: { type: "string", description: "Repository-relative path" },
+    line: { type: "integer", description: "First line of the defect at the PR head" },
+    end_line: { type: "integer", description: "Last line, if it spans several" },
+    severity: { type: "string", enum: SEVERITIES },
+    title: { type: "string", description: "A few words stating the defect" },
+    body: { type: "string", description: "What breaks, the trigger, and the result. 2-4 plain sentences." },
+    evidence: { type: "array", items: { type: "string" }, description: 'Lines that prove it, each "path:line: code"' },
+    rule: { type: "string", description: "Repository rule id, if the finding breaks one" },
+  },
+  required: ["file", "line", "severity", "title", "body", "evidence"],
+};
+
+function submitFindings(changed: readonly string[]): Submit<Finding[]> {
+  return {
+    spec: {
+      type: "function",
+      function: {
+        name: "submit_findings",
+        description: "Submit the review. Call once, after checking every changed file.",
+        parameters: {
+          type: "object",
+          properties: {
+            checked_files: { type: "array", items: { type: "string" }, description: "Every changed file you checked" },
+            findings: { type: "array", items: candidateSchema },
+          },
+          required: ["checked_files", "findings"],
+        },
+      },
+    },
+    parse(args) {
+      const out = Findings(args);
+      if (out instanceof type.errors) return { ok: false, error: out.summary };
+      const missed = changed.filter((f) => !out.checked_files.includes(f));
+      if (missed.length) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
+      return {
+        ok: true,
+        value: out.findings.map((c) => ({
+          file: c.file,
+          line: c.line,
+          endLine: Math.max(c.line, c.end_line ?? c.line),
+          severity: c.severity,
+          title: c.title.trim(),
+          body: c.body.trim(),
+          evidence: c.evidence,
+          ...(c.rule ? { rule: c.rule } : {}),
+        })),
+      };
+    },
+  };
+}
+
+export type VerdictResult = typeof Verdict.infer;
+
+const submitVerdict: Submit<VerdictResult> = {
+  spec: {
+    type: "function",
+    function: {
+      name: "submit_verdict",
+      description: "Submit the verdict on the finding.",
+      parameters: {
+        type: "object",
+        properties: {
+          verdict: { type: "string", enum: ["confirmed", "rejected"] },
+          reason: { type: "string", description: "One or two sentences" },
+          evidence: { type: "array", items: { type: "string" }, description: 'Lines you checked, each "path:line: code"' },
+          severity: { type: "string", enum: SEVERITIES },
+          title: { type: "string", description: "Corrected title, if confirmed and the original is off" },
+          body: { type: "string", description: "Corrected body, if confirmed and the original overstates or misdescribes it" },
+        },
+        required: ["verdict", "reason", "evidence", "severity"],
+      },
+    },
+  },
+  parse(args) {
+    const out = Verdict(args);
+    return out instanceof type.errors ? { ok: false, error: out.summary } : { ok: true, value: out };
+  },
+};
+
+const FIND_SYSTEM = `You are ReviewPilot, a senior engineer reviewing a pull request. Find the defects this PR introduces.
+You are the first of two passes. You find candidates; a separate verifier then checks each one in depth against the code and throws out anything it cannot prove. So your job is recall: a real bug you skip is lost for good, while a candidate the verifier rejects costs little. List every specific, concrete suspicion.
+
+You get part of the diff (other parts go to other reviewers), and you can read any file at the PR head, search the repository and list directories. Use them briefly to understand the code: open a caller, type or helper when you need it to see whether something is a problem. You have a small tool budget, so do not try to prove everything; leave deep checking to the verifier. Drop a candidate only when the code you have seen clearly rules it out, such as a guard or early return that already handles the case.
+
+Go through every changed file in your part. Look for:
+- logic bugs: wrong conditions, off-by-one, inverted checks, wrong variable, stale state, broken async ordering
+- unhandled cases: null or empty input, error paths, retries, races, partial failure
+- security and privacy: injection, XSS, SSRF, path traversal, missing auth or ownership checks, secrets in code or logs, one user's data reaching another, trusting client input
+- data: schema or stored-data changes without a migration or backfill, data loss, breaking existing records or older clients
+- what the change misses: a caller, type, config or code path that the new behaviour should have updated but did not
+- inconsistency with how the same thing is done elsewhere in this repository
+- the repository rules, if any are given
+
+Do not report: formatting, naming or style; "add tests" or "add logging" as generic advice; problems that existed before this PR in code it does not touch; behaviour that a test in the diff or a code comment says is intended. That last exemption never covers security or privacy: if the intended behaviour itself lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, report it.
+
+Severity:
+- critical: security or privacy hole, data loss or corruption, crash or broken build on a main path
+- major: wrong behaviour real users will hit
+- minor: a real but narrow edge case, or an inconsistency that will cause bugs later
+
+Finish by calling submit_findings once. List every changed file in your part that you checked. For each candidate give file and line (new-side numbers from the diff, or the file's own numbering for code you opened), a title of a few words, a body of 2-4 plain sentences (what breaks, the input or sequence that triggers it, the result, and what the verifier should check), and evidence: the lines involved, each as "path:line: code". Be specific: "X is null when Y, so Z throws" is a candidate; "this could have edge cases" is not. An empty list is right only when you found nothing specific.`;
+
+const VERIFY_SYSTEM = `You verify one code review finding on a pull request. Assume it is wrong until the code proves it right. You can read any file at the PR head, search the repository and list directories.
+
+Check, in order:
+1. The cited lines exist at the PR head and say what the finding claims.
+2. Trace the trigger: follow the input through the actual code to the wrong result. Open every function, type and caller on the way. Do not assume what any of them do.
+3. Look for anything that already prevents it: a guard, early return, validation, type constraint, a caller that never passes that input, or a test or comment in the PR showing the behaviour is intended. Intent does not clear a security or privacy problem: if the intended behaviour lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, it still counts.
+4. The PR introduced it: the lines are added or changed in the diff, or the diff changed something they depend on.
+
+Confirm only if every step holds. Reject if any step fails or you cannot finish the check. Confirming a false finding costs more than rejecting a real one.
+
+Call submit_verdict with the verdict, a one or two sentence reason, the evidence lines you checked ("path:line: code"), and the severity you would give it. When confirming, also give a corrected title and body if the original overstates or misdescribes the problem.`;
+
+function repoSection(config: Config, rules: readonly Rule[], guidance: string): string {
+  const parts: string[] = [];
+  if (rules.length) {
+    parts.push(
+      "Repository rules (cite the id in `rule` when a finding breaks one):\n" +
+        rules.map((r) => `- ${r.id} [${r.severity ?? "major"}]: ${r.rule}`).join("\n"),
+    );
+  }
+  if (config.instructions.trim()) parts.push(`Repository instructions:\n${config.instructions.trim()}`);
+  if (guidance.trim()) parts.push(`Repository guidance (from its agent docs, default branch):\n${guidance.trim()}`);
+  return parts.length ? `\n\n${parts.join("\n\n")}` : "";
+}
+
+const pool = async <T, R>(items: readonly T[], size: number, fn: (item: T, index: number) => Promise<R>) => {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i] as T, i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
+  return results;
+};
+
+/** Groups files into parts of about `size` characters; a file larger than that is its own part. */
+export function chunk(diffs: readonly FileDiff[], size: number): FileDiff[][] {
+  const parts: FileDiff[][] = [];
+  let current: FileDiff[] = [];
+  let length = 0;
+  for (const d of diffs) {
+    if (current.length && length + d.numbered.length > size) {
+      parts.push(current);
+      current = [];
+      length = 0;
+    }
+    current.push(d);
+    length += d.numbered.length;
+  }
+  if (current.length) parts.push(current);
+  return parts;
+}
+
+/** Diff characters per find agent. Smaller parts mean shorter contexts and closer reading. */
+const CHUNK_CHARS = 25_000;
+/** Candidates sent to verification, most severe first. */
+const MAX_VERIFY = 25;
+
+export type ReviewInput = {
+  find: Llm;
+  verify: Llm;
+  root: string;
+  config: Config;
+  rules: readonly Rule[];
+  guidance: string;
+  pr: { title: string; body: string };
+  diffs: readonly FileDiff[];
+  /** Findings from earlier runs: open ones are re-checked, dismissed ones are not raised again. */
+  previous: readonly Tracked[];
+  log: (line: string) => void;
+};
+
+/** `verdict` is undefined when the check itself failed (timeout, API error): not posted, not marked fixed. */
+export type Checked = { finding: Finding; verdict?: VerdictResult; previous?: Tracked };
+
+export async function review(input: ReviewInput): Promise<{ checked: Checked[]; candidates: number }> {
+  const { config, diffs, previous, log } = input;
+  const changed = diffs.filter((d) => d.status !== "deleted").map((d) => d.path);
+  const open = previous.filter((p) => p.status === "open");
+  const dismissed = previous.filter((p) => p.status === "dismissed");
+
+  const history = [
+    open.length &&
+      "Already reported and still being tracked (do not report again, in any wording):\n" +
+        open.map((p) => `- ${p.file}:${p.line} ${p.title}`).join("\n"),
+    dismissed.length &&
+      "Dismissed by the author (do not raise again):\n" + dismissed.map((p) => `- ${p.file}:${p.line} ${p.title}`).join("\n"),
+  ].filter(Boolean);
+
+  const all = diffs.map((d) => `- ${d.path} (${d.status})`).join("\n");
+  const chunks = chunk(diffs, CHUNK_CHARS);
+  log(`find: ${changed.length} files in ${chunks.length} parts`);
+
+  const parts = await pool(chunks, 3, async (part, i) => {
+    const mine = part.filter((d) => d.status !== "deleted").map((d) => d.path);
+    const user = [
+      `PR title: ${input.pr.title}`,
+      `PR description:\n${input.pr.body.slice(0, 4000) || "(none)"}`,
+      ...history,
+      `All files changed in the PR:\n${all}`,
+      `Your part (${i + 1} of ${chunks.length}). Diff, left column is the line number at the PR head; + added, - removed:\n\n${part
+        .map((d) => `## ${d.path} (${d.status})\n${d.numbered}`)
+        .join("\n\n")}`,
+    ].join("\n\n");
+    return runAgent({
+      llm: input.find,
+      root: input.root,
+      system: FIND_SYSTEM + repoSection(config, input.rules, input.guidance),
+      user,
+      submit: submitFindings(mine),
+      maxTurns: 12,
+      deadline: Date.now() + 4 * 60_000,
+      log: (line) => log(`[part ${i + 1}] ${line}`),
+    }).catch((e: unknown) => {
+      log(`[part ${i + 1}] find failed: ${e instanceof Error ? e.message : String(e)}`);
+      return [] as Finding[];
+    });
+  });
+  const found = parts.flat().sort(bySeverity);
+  log(`find: ${found.length} candidates`);
+
+  const jobs: { finding: Finding; previous?: Tracked }[] = [
+    ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
+    ...open.map((p) => ({ finding: p as Finding, previous: p })),
+  ];
+
+  const patchOf = (file: string) => diffs.find((d) => d.path === file)?.numbered ?? "(file not in the diff)";
+  const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
+    const verdict = await runAgent({
+      llm: input.verify,
+      root: input.root,
+      system: VERIFY_SYSTEM,
+      user: [
+        prev ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head." : "",
+        `Finding:\n${JSON.stringify(
+          { file: finding.file, line: finding.line, end_line: finding.endLine, severity: finding.severity, title: finding.title, body: finding.body, evidence: finding.evidence },
+          null,
+          2,
+        )}`,
+        `Diff of ${finding.file}:\n${patchOf(finding.file)}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      submit: submitVerdict,
+      maxTurns: 12,
+      deadline: Date.now() + 3 * 60_000,
+      log: () => {},
+    }).catch((e: unknown) => {
+      log(`verify error: ${finding.file}:${finding.line} ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    });
+    if (verdict) log(`verify ${verdict.verdict}: ${finding.file}:${finding.line} ${finding.title} (${verdict.reason.slice(0, 160)})`);
+    return { finding, ...(verdict ? { verdict } : {}), ...(prev ? { previous: prev } : {}) };
+  });
+
+  return { checked, candidates: found.length };
+}
+
+/** Applies the verifier's corrections to a confirmed finding. */
+export const settle = (finding: Finding, verdict: VerdictResult): Finding => ({
+  ...finding,
+  severity: verdict.severity satisfies Severity,
+  title: verdict.title?.trim() || finding.title,
+  body: verdict.body?.trim() || finding.body,
+  evidence: verdict.evidence.length ? verdict.evidence : finding.evidence,
+});

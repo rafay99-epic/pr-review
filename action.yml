@@ -1,0 +1,25 @@
+name: ReviewPilot
+description: PR review agent that reads the code it needs, re-checks every finding, and posts only what it can prove.
+author: rafay99-epic
+branding:
+  icon: eye
+  color: blue
+
+inputs:
+  api_key:
+    description: API key for your model provider (Command Code, OpenRouter, OpenCode Zen, or any OpenAI-compatible API).
+    required: true
+  base_url:
+    description: OpenAI-compatible base URL of the provider.
+    default: https://api.commandcode.ai/provider/v1
+  model:
+    description: Model for the find pass. Overrides `model.name` in .reviewpilot.yml.
+  verify_model:
+    description: Model for the verify pass. Overrides `model.verify` in .reviewpilot.yml.
+  github_token:
+    description: Token to read the PR and post. A GitHub App installation token posts as that app's bot.
+    default: ${{ github.token }}
+
+runs:
+  using: node24
+  main: dist/index.mjs
