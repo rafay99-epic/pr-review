@@ -17,7 +17,7 @@ Because it is derived from findings, the score only moves when findings change.
 
 On every push, open findings are checked again against the new code:
 
-- **Fixed.** ReviewPilot replies "Fixed in" with the commit, resolves the thread and collapses the comment as outdated.
+- **Fixed.** ReviewPilot replies "Fixed in" with the commit and collapses the comment as outdated. It also resolves the thread when its token has Contents write; GitHub requires that for an App to resolve threads.
 - **Still open.** It stays in the table with its original wording.
 - **New.** Posted inline, counted in the delta line.
 
