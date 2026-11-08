@@ -19,7 +19,7 @@ const FileConfig = type({
   "model?": {
     "name?": "string",
     "verify?": "string",
-    "effort?": "'low' | 'medium' | 'high'",
+    "effort?": "'none' | 'low' | 'medium' | 'high'",
   },
   "review?": {
     "ignore?": "string[]",
@@ -50,7 +50,7 @@ export const DEFAULTS = {
 } satisfies typeof FileConfig.infer;
 
 export type Config = {
-  model: { name: string; verify: string; effort: "low" | "medium" | "high" };
+  model: { name: string; verify: string; effort: "none" | "low" | "medium" | "high" };
   review: { ignore: string[]; min_severity: (typeof SEVERITIES)[number]; max_findings: number };
   rules: Rule[];
   instructions: string;

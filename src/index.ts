@@ -146,10 +146,14 @@ async function main() {
     // that matches a fixed one was reintroduced: it replaces the fixed entry and posts again.
     const known = findings.filter((t) => t.status !== "fixed");
     const fresh: Tracked[] = [];
+    let overCap = 0;
     for (const f of await dedupe(find, root, confirmed, known, log)) {
       const fp = fingerprint(f);
       if ([...known, ...fresh].some((t) => t.fp === fp || sameIssue(t, f))) continue;
-      if (fresh.length >= config.review.max_findings) break;
+      if (fresh.length >= config.review.max_findings) {
+        overCap += 1;
+        continue;
+      }
       const reopened = findings.findIndex((t) => t.fp === fp && t.status === "fixed");
       if (reopened >= 0) findings.splice(reopened, 1);
       fresh.push({ ...f, fp, status: "open" });
@@ -173,6 +177,7 @@ async function main() {
     const warningText = [
       warning,
       skipped > 0 ? `${skipped} files did not fit in the review budget and were not reviewed.` : "",
+      overCap > 0 ? `${overCap} more confirmed findings were over max_findings (${config.review.max_findings}) and are not shown.` : "",
       failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : "",
     ].filter(Boolean).join(" ");
     const run = {
@@ -194,10 +199,13 @@ async function main() {
       return;
     }
 
+    let inlinePosted = false;
     if (inline.length) {
       try {
         await gh.review(number, pr.head.sha, inline);
+        inlinePosted = true;
       } catch (e) {
+    if (e instanceof Error && "keepSummary" in e) throw e;
         log(`Inline review failed, moving findings to the summary: ${String(e)}`);
         outside.push(...fresh.filter((f) => !outside.includes(f)));
       }
@@ -210,7 +218,12 @@ async function main() {
     // Save the state right after the inline comments exist, so a later failure cannot
     // make the next run post them again.
     const body = summaryBody(state, prev, outside, run);
-    if (summaryId) await gh.editComment(summaryId, body);
+    // Inline comments are already up, so the new state must land: retry once, and never
+    // fall back to the old state (that would make the next run post them again).
+    if (summaryId) await gh.editComment(summaryId, body).catch(() => gh.editComment(summaryId as number, body)).catch((e: unknown) => {
+      if (inlinePosted) throw Object.assign(new Error(`summary not saved: ${String(e)}`), { keepSummary: true });
+      throw e;
+    });
     else await gh.comment(number, body);
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}\n`);
     // Paced: GitHub's secondary rate limit rejects bursts of new comments.
@@ -220,6 +233,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 1500));
     }
   } catch (e) {
+    if (e instanceof Error && "keepSummary" in e) throw e;
     // Put the previous summary back so a failed run never wipes the PR's history; on a
     // first run, say it failed instead of leaving "reviewing..." up.
     if (!dryRun && summaryId) {

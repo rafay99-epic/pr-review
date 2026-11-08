@@ -40,10 +40,11 @@ export function parseDiff(raw: string): FileDiff[] {
     else if (text.startsWith("rename to ")) {
       file.status = "renamed";
       file.path = text.slice("rename to ".length);
-    } else if (text.startsWith("+++ b/")) {
-      // The +++ line carries the new path verbatim, spaces included.
+    } else if (hunk < 0 && text.startsWith("+++ b/")) {
+      // The +++ line carries the new path verbatim, spaces included. Header lines only
+      // count before the first hunk: inside a hunk "+++ x" is an added line "++ x".
       file.path = text.slice("+++ b/".length);
-    } else if (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index ")) {
+    } else if (hunk < 0 && (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index "))) {
       continue;
     } else if (text.startsWith("@@")) {
       const start = text.match(HUNK)?.[1];

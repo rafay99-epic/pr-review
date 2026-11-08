@@ -100,3 +100,11 @@ test("parseDiff takes the path from the +++ line, spaces included", () => {
   const [f] = parseDiff("diff --git a/my file.ts b/my file.ts\nindex 1..2 100644\n--- a/my file.ts\n+++ b/my file.ts\n@@ -1 +1 @@\n-a\n+b\n");
   assert.equal(f?.path, "my file.ts");
 });
+
+test("parseDiff keeps hunk lines that look like file headers", () => {
+  const [f] = parseDiff("diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1,2 @@\n--- old comment\n+++ new comment\n select 1;\n");
+  assert.equal(f?.path, "q.sql");
+  assert.match(f?.numbered ?? "", /^\s+1 \+ \+\+ new comment$/m);
+  assert.match(f?.numbered ?? "", /^\s+- -- old comment$/m);
+  assert.deepEqual([...(f?.commentable ?? [])], [1, 2]);
+});

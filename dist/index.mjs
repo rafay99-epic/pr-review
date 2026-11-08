@@ -16038,7 +16038,7 @@ var FileConfig = type({
   "model?": {
     "name?": "string",
     "verify?": "string",
-    "effort?": "'low' | 'medium' | 'high'"
+    "effort?": "'none' | 'low' | 'medium' | 'high'"
   },
   "review?": {
     "ignore?": "string[]",
@@ -16131,9 +16131,9 @@ function parseDiff(raw) {
     else if (text.startsWith("rename to ")) {
       file.status = "renamed";
       file.path = text.slice("rename to ".length);
-    } else if (text.startsWith("+++ b/")) {
+    } else if (hunk < 0 && text.startsWith("+++ b/")) {
       file.path = text.slice("+++ b/".length);
-    } else if (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index ")) {
+    } else if (hunk < 0 && (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index "))) {
       continue;
     } else if (text.startsWith("@@")) {
       const start = text.match(HUNK)?.[1];
@@ -16277,7 +16277,8 @@ function createLlm(opts) {
           messages,
           tools,
           tool_choice: force ? { type: "function", function: { name: force } } : "auto",
-          reasoning_effort: opts.effort
+          // "none" leaves the parameter out, for providers that reject it.
+          ...opts.effort === "none" ? {} : { reasoning_effort: opts.effort }
         }),
         signal: AbortSignal.timeout(opts.timeoutMs ?? 24e4)
       }).catch((e) => ({ ok: false, status: 0, error: e }));
@@ -16292,7 +16293,12 @@ function createLlm(opts) {
         const detail = "text" in res ? await res.text() : String(res.error);
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
-      const data = await res.json();
+      const data = await res.json().catch(() => void 0);
+      if (!data && attempt < 4) {
+        await sleep(2 ** attempt * 3e3);
+        continue;
+      }
+      if (!data) throw new Error(`${opts.model}: response body is not JSON`);
       const message = data.choices?.[0]?.message;
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;
@@ -16342,7 +16348,7 @@ function summaryBody(state, prev, outside, run2) {
   lines.push("");
   if (open.length) {
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
-    for (const f of open) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
+    for (const f of open.filter((o) => !outside.includes(o))) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {
     lines.push("No verified issues.");
   }
@@ -16448,7 +16454,7 @@ async function runTool(root, name, args2) {
       const start = Math.max(1, num(args2.start_line, 1));
       if (start > lines.length) return `${str(args2.path)} has only ${lines.length} lines.`;
       const end = Math.max(start, Math.min(lines.length, num(args2.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1));
-      const body = lines.slice(start - 1, end).map((text2, i) => `${String(start + i).padStart(5)}  ${text2}`).join("\n");
+      const body = lines.slice(start - 1, end).map((text2, i) => `${String(start + i).padStart(5)}  ${text2.length > 2e3 ? `${text2.slice(0, 2e3)} [line cut]` : text2}`).join("\n").slice(0, 8e4);
       const more = end < lines.length ? `
 [lines ${end + 1}-${lines.length} not shown]` : "";
       return `${str(args2.path)} (${lines.length} lines)
@@ -16941,10 +16947,14 @@ ${text}` : "";
     const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank).sort(bySeverity);
     const known = findings.filter((t) => t.status !== "fixed");
     const fresh = [];
+    let overCap = 0;
     for (const f of await dedupe(find, root, confirmed, known, log)) {
       const fp = fingerprint(f);
       if ([...known, ...fresh].some((t) => t.fp === fp || sameIssue(t, f))) continue;
-      if (fresh.length >= config.review.max_findings) break;
+      if (fresh.length >= config.review.max_findings) {
+        overCap += 1;
+        continue;
+      }
       const reopened = findings.findIndex((t) => t.fp === fp && t.status === "fixed");
       if (reopened >= 0) findings.splice(reopened, 1);
       fresh.push({ ...f, fp, status: "open" });
@@ -16964,6 +16974,7 @@ ${text}` : "";
     const warningText = [
       warning,
       skipped > 0 ? `${skipped} files did not fit in the review budget and were not reviewed.` : "",
+      overCap > 0 ? `${overCap} more confirmed findings were over max_findings (${config.review.max_findings}) and are not shown.` : "",
       failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : ""
     ].filter(Boolean).join(" ");
     const run2 = {
@@ -16987,10 +16998,13 @@ ${c.body}`);
 ${summaryBody(state, prev, outside, run2)}`);
       return;
     }
+    let inlinePosted = false;
     if (inline.length) {
       try {
         await gh.review(number2, pr.head.sha, inline);
+        inlinePosted = true;
       } catch (e) {
+        if (e instanceof Error && "keepSummary" in e) throw e;
         log(`Inline review failed, moving findings to the summary: ${String(e)}`);
         outside.push(...fresh.filter((f) => !outside.includes(f)));
       }
@@ -17001,7 +17015,10 @@ ${summaryBody(state, prev, outside, run2)}`);
       }
     }
     const body = summaryBody(state, prev, outside, run2);
-    if (summaryId) await gh.editComment(summaryId, body);
+    if (summaryId) await gh.editComment(summaryId, body).catch(() => gh.editComment(summaryId, body)).catch((e) => {
+      if (inlinePosted) throw Object.assign(new Error(`summary not saved: ${String(e)}`), { keepSummary: true });
+      throw e;
+    });
     else await gh.comment(number2, body);
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}
 `);
@@ -17011,6 +17028,7 @@ ${summaryBody(state, prev, outside, run2)}`);
       await new Promise((r) => setTimeout(r, 1500));
     }
   } catch (e) {
+    if (e instanceof Error && "keepSummary" in e) throw e;
     if (!dryRun && summaryId) {
       const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
       const body = (existing?.id === summaryId ? existing?.body : void 0) ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}

@@ -91,8 +91,9 @@ export async function runTool(root: string, name: string, args: Record<string, u
       const end = Math.max(start, Math.min(lines.length, num(args.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1));
       const body = lines
         .slice(start - 1, end)
-        .map((text, i) => `${String(start + i).padStart(5)}  ${text}`)
-        .join("\n");
+        .map((text, i) => `${String(start + i).padStart(5)}  ${text.length > 2000 ? `${text.slice(0, 2000)} [line cut]` : text}`)
+        .join("\n")
+        .slice(0, 80_000);
       const more = end < lines.length ? `\n[lines ${end + 1}-${lines.length} not shown]` : "";
       return `${str(args.path)} (${lines.length} lines)\n${body}${more}`;
     }

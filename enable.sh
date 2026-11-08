@@ -45,7 +45,7 @@ for repo in "$@"; do
     gh api -X DELETE "repos/$repo/contents/.github/workflows/pr-agent.yml" \
       -f message="ci: drop the PR-Agent caller" -f sha="$old" -f branch="$branch" > /dev/null
   fi
-  if [[ -n "$(gh pr list -R "$repo" --head "$branch" --state open --json number --jq '.[0].number')" ]]; then
+  if [[ "$(gh pr list -R "$repo" --head "$branch" --state open --json number --jq 'length')" != "0" ]]; then
     echo "$repo: a PR from $branch is already open, the branch was updated"
   else
     gh pr create -R "$repo" --base "$base" --head "$branch" --title "ci: review PRs with ReviewPilot" --body "$body"

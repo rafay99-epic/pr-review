@@ -49,7 +49,7 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
 
   if (open.length) {
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
-    for (const f of open) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
+    for (const f of open.filter((o) => !outside.includes(o))) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {
     lines.push("No verified issues.");
   }

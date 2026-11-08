@@ -40,8 +40,10 @@ jobs:
     env:
       HAS_APP: ${{ secrets.REVIEWPILOT_APP_ID != '' && secrets.REVIEWPILOT_PRIVATE_KEY != '' }}
     steps:
+      # A revoked key or a missing install must not stop reviews: fall back to github.token.
       - id: app
         if: env.HAS_APP == 'true'
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.REVIEWPILOT_APP_ID }}

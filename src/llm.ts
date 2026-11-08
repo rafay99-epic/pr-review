@@ -53,7 +53,8 @@ export function createLlm(opts: {
           messages,
           tools,
           tool_choice: force ? { type: "function", function: { name: force } } : "auto",
-          reasoning_effort: opts.effort,
+          // "none" leaves the parameter out, for providers that reject it.
+          ...(opts.effort === "none" ? {} : { reasoning_effort: opts.effort }),
         }),
         signal: AbortSignal.timeout(opts.timeoutMs ?? 240_000),
       }).catch((e: unknown) => ({ ok: false, status: 0, error: e }) as const);
@@ -71,7 +72,12 @@ export function createLlm(opts: {
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
 
-      const data = (await res.json()) as Completion;
+      const data = (await res.json().catch(() => undefined)) as Completion | undefined;
+      if (!data && attempt < 4) {
+        await sleep(2 ** attempt * 3000);
+        continue;
+      }
+      if (!data) throw new Error(`${opts.model}: response body is not JSON`);
       const message = data.choices?.[0]?.message;
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;
