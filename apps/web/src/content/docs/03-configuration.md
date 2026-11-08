@@ -38,7 +38,7 @@ rules:
 | `review.ignore` | glob list | lockfiles, build output, images | Added to the built-in list, never replacing it |
 | `review.min_severity` | `minor` `major` `critical` | `minor` | Findings below it are not posted |
 | `review.max_findings` | 1 to 50 | `20` | New findings posted per run, most severe first |
-| `context_files` | path list | `[AGENTS.md, CLAUDE.md]` | Read as repository guidance, up to 10,000 characters |
+| `context_files` | path list | `[AGENTS.md, CLAUDE.md]` | Read as repository guidance, up to 10,000 characters in total across all files |
 | `instructions` | string | none | Extra guidance for every review |
 | `rules[].id` | string | required | Cited on findings that break the rule |
 | `rules[].rule` | string | required | What must hold, in one or two sentences |

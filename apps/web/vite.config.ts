@@ -35,8 +35,15 @@ function docs(): Plugin {
       if (!id.endsWith(".md")) return;
       const front = /^---\n([\s\S]*?)\n---\n/.exec(code);
       const meta = new Map(
-        (front?.[1] ?? "").split("\n").map((line) => [line.slice(0, line.indexOf(":")).trim(), line.slice(line.indexOf(":") + 1).trim()]),
+        (front?.[1] ?? "")
+          .split("\n")
+          .filter((line) => line.includes(":"))
+          .map((line) => [line.slice(0, line.indexOf(":")).trim(), line.slice(line.indexOf(":") + 1).trim()]),
       );
+      // A doc without a title or summary is a build error, not a blank heading on the site.
+      for (const key of ["title", "summary"]) {
+        if (!meta.get(key)) throw new Error(`${basename(id)}: front matter needs a "${key}:" line`);
+      }
       const html = marked.parse(front ? code.slice(front[0].length) : code, { async: false });
       const doc = { slug: basename(id, ".md").replace(/^\d+-/, ""), title: meta.get("title") ?? "", summary: meta.get("summary") ?? "", html };
       return { code: `export default ${JSON.stringify(doc)};`, map: null };
