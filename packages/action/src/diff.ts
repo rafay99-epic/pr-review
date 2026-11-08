@@ -84,7 +84,14 @@ export function anchor(
   end: number,
 ): { line: number; startLine?: number } | undefined {
   if (!file) return undefined;
-  const last = [end, start].find((n) => file.commentable.has(n));
+  // The last commentable line in the range, so a range that ends on unchanged code still anchors.
+  let last: number | undefined;
+  for (let n = end; n >= start; n--) {
+    if (file.commentable.has(n)) {
+      last = n;
+      break;
+    }
+  }
   if (last === undefined) return undefined;
   const first = start < last && file.commentable.has(start) && file.hunkOf.get(start) === file.hunkOf.get(last)
     ? start

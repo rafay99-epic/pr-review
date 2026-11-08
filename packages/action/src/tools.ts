@@ -4,7 +4,7 @@
 
 import { execFile } from "node:child_process";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { ToolSpec } from "./llm.ts";
 
@@ -124,10 +124,11 @@ export async function runTool(root: string, name: string, args: Record<string, u
     if (name === "list_dir") {
       const full = await inside(root, str(args.path) || ".");
       if (!full || !(await stat(full)).isDirectory()) return "Error: not a directory in the repository.";
-      const entries = (await readdir(full, { withFileTypes: true }))
-        .filter((e) => e.name !== ".git")
-        .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-        .sort();
+      const dirents = (await readdir(full, { withFileTypes: true })).filter((e) => e.name !== ".git");
+      // A symlink to a directory is listed as one, as long as it stays inside the repository.
+      const isDir = async (e: (typeof dirents)[number]) =>
+        e.isDirectory() || (e.isSymbolicLink() && (await inside(root, join(str(args.path) || ".", e.name)).then((p) => (p ? stat(p) : undefined)).then((s) => s?.isDirectory() ?? false)));
+      const entries = (await Promise.all(dirents.map(async (e) => ((await isDir(e)) ? `${e.name}/` : e.name)))).sort();
       const more = entries.length > MAX_ENTRIES ? `\n[${entries.length - MAX_ENTRIES} more entries not shown]` : "";
       return entries.slice(0, MAX_ENTRIES).join("\n") + more;
     }

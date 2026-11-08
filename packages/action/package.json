@@ -1,0 +1,21 @@
+{
+  "name": "@reviewpilot/action",
+  "private": true,
+  "type": "module",
+  "description": "Open-source PR reviewer bot: an agent that reads the code it needs, verifies every finding, and posts only what it can prove.",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'src/**/*.test.ts'",
+    "local": "node scripts/local.ts"
+  },
+  "dependencies": {
+    "arktype": "^2.1.20",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "7.0.2"
+  }
+}

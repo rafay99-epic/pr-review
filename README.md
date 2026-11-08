@@ -124,16 +124,21 @@ rules:
 | `model` | from config | Overrides `model.name` |
 | `verify_model` | from config | Overrides `model.verify` |
 | `github_token` | `github.token` | An App token posts as that App's bot |
-| `bot_login` | `github-actions[bot]` | The account the token posts as; only its comments are trusted as ReviewPilot's state |
+| `bot_login` | `github-actions[bot]` | The account the token posts as. Only its comments and `github-actions[bot]`'s are trusted as ReviewPilot's state |
 
 ## Develop
 
+A Turborepo with two workspaces: `packages/action` (the reviewer) and `apps/web` (the site and docs, [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)).
+
 ```sh
 pnpm install
-pnpm test && pnpm typecheck
-pnpm build                                   # bundles to dist/, which is committed
-REVIEWPILOT_API_KEY=... node scripts/local.ts owner/repo 123   # dry run on a real PR, posts nothing
+pnpm check                                   # typecheck, test and build everything
+pnpm dev                                     # run the site locally
+pnpm --filter @reviewpilot/action build      # bundle the action to packages/action/dist (committed)
+REVIEWPILOT_API_KEY=... pnpm --filter @reviewpilot/action local owner/repo 123   # dry run on a real PR, posts nothing
 ```
+
+`ci.yml` runs the checks on every PR and fails if `packages/action/dist` is stale. `site.yml` builds the site; Vercel deploys it from `apps/web` (see `apps/web/vercel.json`).
 
 ## My repos
 
