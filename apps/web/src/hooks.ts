@@ -106,7 +106,21 @@ export function useActive(ids: readonly string[]) {
       const el = document.getElementById(id);
       if (el) io.observe(el);
     }
-    return () => io.disconnect();
+    // A short last section never reaches the middle band, so the end of the page selects it.
+    let frame = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const last = ids.at(-1);
+        if (last && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) setActive(last);
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      io.disconnect();
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", onScroll);
+    };
   }, [ids]);
   return active;
 }
