@@ -7,8 +7,8 @@ import { runTool, TOOL_SPECS } from "./tools.ts";
 
 export type Submit<T> = {
   spec: ToolSpec;
-  /** Validates the submitted arguments; an error goes back to the model. */
-  parse: (args: unknown) => { ok: true; value: T } | { ok: false; error: string };
+  /** Validates the submitted arguments; an error goes back to the model. `final` is set on the forced last call, where only hard errors should bounce. */
+  parse: (args: unknown, final: boolean) => { ok: true; value: T } | { ok: false; error: string };
 };
 
 export async function runAgent<T>(opts: {
@@ -57,8 +57,9 @@ export async function runAgent<T>(opts: {
         continue;
       }
       if (call.function.name === name) {
-        const parsed = submit.parse(args);
+        const parsed = submit.parse(args, warned);
         if (!parsed.ok) {
+          opts.log(`${name} rejected: ${parsed.error.slice(0, 200)}`);
           messages.push({ role: "tool", tool_call_id: call.id, content: `Error: ${parsed.error}. Fix it and call ${name} again.` });
           continue;
         }

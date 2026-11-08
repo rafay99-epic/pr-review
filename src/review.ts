@@ -67,11 +67,12 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
         },
       },
     },
-    parse(args) {
+    parse(args, final) {
       const out = Findings(args);
       if (out instanceof type.errors) return { ok: false, error: out.summary };
+      // Coverage is enforced until the budget runs out; then a partial review beats none.
       const missed = changed.filter((f) => !out.checked_files.includes(f));
-      if (missed.length) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
+      if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,
         value: out.findings.map((c) => ({
@@ -299,6 +300,52 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
   });
 
   return { checked, candidates: found.length };
+}
+
+const Groups = type({ duplicates: "number.integer[][]" });
+
+/**
+ * Drops findings that describe the same defect as an earlier one in the list (the find
+ * parts overlap, so one bug can arrive twice in different words). One small call.
+ */
+export async function dedupe(llm: Llm, root: string, findings: readonly Finding[], log: (l: string) => void): Promise<Finding[]> {
+  if (findings.length < 2) return [...findings];
+  const groups = await runAgent({
+    llm,
+    root,
+    system:
+      "You group code review findings that describe the same underlying defect (same root cause, even if worded differently or cited at different lines). Findings that only share a file or a topic are not duplicates. Answer with submit_groups right away; you do not need the other tools.",
+    user: findings.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}\n   ${f.body}`).join("\n"),
+    submit: {
+      spec: {
+        type: "function",
+        function: {
+          name: "submit_groups",
+          description: "Submit groups of duplicate finding numbers. Omit findings that have no duplicate.",
+          parameters: {
+            type: "object",
+            properties: { duplicates: { type: "array", items: { type: "array", items: { type: "integer" } } } },
+            required: ["duplicates"],
+          },
+        },
+      },
+      parse(args) {
+        const out = Groups(args);
+        return out instanceof type.errors ? { ok: false, error: out.summary } : { ok: true, value: out.duplicates };
+      },
+    },
+    maxTurns: 2,
+    deadline: Date.now() + 60_000,
+    log: () => {},
+  }).catch(() => [] as number[][]);
+  const drop = new Set<number>();
+  for (const group of groups) {
+    // Keep the most severe finding of each group (the list is sorted by severity).
+    const [keep, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < findings.length).sort((a, b) => a - b);
+    if (keep !== undefined) for (const i of rest) drop.add(i);
+  }
+  if (drop.size) log(`dedupe: dropped ${drop.size} duplicate finding(s)`);
+  return findings.filter((_, i) => !drop.has(i));
 }
 
 /** Applies the verifier's corrections to a confirmed finding. */

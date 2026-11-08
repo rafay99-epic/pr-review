@@ -8,8 +8,8 @@ import { anchor, parseDiff } from "./diff.ts";
 import { checkoutPr, diff, fetchRef, readAt } from "./git.ts";
 import { createGitHub, type InlineComment } from "./github.ts";
 import { createLlm } from "./llm.ts";
-import { inlineBody, progressBody, summaryBody } from "./render.ts";
-import { review, settle } from "./review.ts";
+import { bySeverity, inlineBody, progressBody, summaryBody } from "./render.ts";
+import { dedupe, review, settle } from "./review.ts";
 import {
   FINDING_TAG,
   fingerprint,
@@ -123,11 +123,12 @@ async function main() {
       return c.verdict.verdict === "confirmed" ? { ...p, line: c.finding.line } : { ...p, status: "fixed" as const };
     });
     const minRank = SEVERITIES.indexOf(config.review.min_severity);
+    const confirmed = checked
+      .flatMap((c) => (!c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []))
+      .filter((f) => SEVERITIES.indexOf(f.severity) <= minRank)
+      .sort(bySeverity);
     const fresh: Tracked[] = [];
-    for (const c of checked) {
-      if (c.previous || c.verdict?.verdict !== "confirmed") continue;
-      const f = settle(c.finding, c.verdict);
-      if (SEVERITIES.indexOf(f.severity) > minRank) continue;
+    for (const f of await dedupe(find, root, confirmed, log)) {
       const fp = fingerprint(f);
       const dup = [...findings, ...fresh].some((t) => t.fp === fp || (t.status !== "fixed" && sameIssue(t, f)));
       if (!dup && fresh.length < config.review.max_findings) fresh.push({ ...f, fp, status: "open" });

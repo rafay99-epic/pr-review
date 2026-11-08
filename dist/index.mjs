@@ -16488,8 +16488,9 @@ async function runAgent(opts) {
         continue;
       }
       if (call.function.name === name) {
-        const parsed2 = submit.parse(args2);
+        const parsed2 = submit.parse(args2, warned);
         if (!parsed2.ok) {
+          opts.log(`${name} rejected: ${parsed2.error.slice(0, 200)}`);
           messages.push({ role: "tool", tool_call_id: call.id, content: `Error: ${parsed2.error}. Fix it and call ${name} again.` });
           continue;
         }
@@ -16556,11 +16557,11 @@ function submitFindings(changed) {
         }
       }
     },
-    parse(args2) {
+    parse(args2, final) {
       const out = Findings(args2);
       if (out instanceof type.errors) return { ok: false, error: out.summary };
       const missed = changed.filter((f) => !out.checked_files.includes(f));
-      if (missed.length) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
+      if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,
         value: out.findings.map((c) => ({
@@ -16757,6 +16758,46 @@ ${patchOf(finding.file)}`
   });
   return { checked, candidates: found.length };
 }
+var Groups = type({ duplicates: "number.integer[][]" });
+async function dedupe(llm, root, findings, log2) {
+  if (findings.length < 2) return [...findings];
+  const groups = await runAgent({
+    llm,
+    root,
+    system: "You group code review findings that describe the same underlying defect (same root cause, even if worded differently or cited at different lines). Findings that only share a file or a topic are not duplicates. Answer with submit_groups right away; you do not need the other tools.",
+    user: findings.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}
+   ${f.body}`).join("\n"),
+    submit: {
+      spec: {
+        type: "function",
+        function: {
+          name: "submit_groups",
+          description: "Submit groups of duplicate finding numbers. Omit findings that have no duplicate.",
+          parameters: {
+            type: "object",
+            properties: { duplicates: { type: "array", items: { type: "array", items: { type: "integer" } } } },
+            required: ["duplicates"]
+          }
+        }
+      },
+      parse(args2) {
+        const out = Groups(args2);
+        return out instanceof type.errors ? { ok: false, error: out.summary } : { ok: true, value: out.duplicates };
+      }
+    },
+    maxTurns: 2,
+    deadline: Date.now() + 6e4,
+    log: () => {
+    }
+  }).catch(() => []);
+  const drop = /* @__PURE__ */ new Set();
+  for (const group of groups) {
+    const [keep, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < findings.length).sort((a, b) => a - b);
+    if (keep !== void 0) for (const i of rest) drop.add(i);
+  }
+  if (drop.size) log2(`dedupe: dropped ${drop.size} duplicate finding(s)`);
+  return findings.filter((_, i) => !drop.has(i));
+}
 var settle = (finding, verdict) => ({
   ...finding,
   severity: verdict.severity,
@@ -16842,11 +16883,9 @@ ${text}` : "";
       return c.verdict.verdict === "confirmed" ? { ...p, line: c.finding.line } : { ...p, status: "fixed" };
     });
     const minRank = SEVERITIES.indexOf(config.review.min_severity);
+    const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank).sort(bySeverity);
     const fresh = [];
-    for (const c of checked) {
-      if (c.previous || c.verdict?.verdict !== "confirmed") continue;
-      const f = settle(c.finding, c.verdict);
-      if (SEVERITIES.indexOf(f.severity) > minRank) continue;
+    for (const f of await dedupe(find, root, confirmed, log)) {
       const fp = fingerprint(f);
       const dup = [...findings, ...fresh].some((t) => t.fp === fp || t.status !== "fixed" && sameIssue(t, f));
       if (!dup && fresh.length < config.review.max_findings) fresh.push({ ...f, fp, status: "open" });
