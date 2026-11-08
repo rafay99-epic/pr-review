@@ -70,7 +70,9 @@ export function readState(body: string): State | undefined {
  * them, so the summary stays under GitHub's 65,536-character comment limit on long PRs.
  */
 export function writeState(state: State): string {
-  const open = state.findings.filter((f) => f.status === "open");
+  const open = state.findings
+    .filter((f) => f.status === "open")
+    .map((f) => ({ ...f, body: f.body.slice(0, 1500), evidence: f.evidence.slice(0, 6).map((e) => e.slice(0, 300)) }));
   const closed = state.findings
     .filter((f) => f.status !== "open")
     .slice(-100)

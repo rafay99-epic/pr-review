@@ -29,6 +29,7 @@ export type Run = {
   model: string;
   files: number;
   candidates: number;
+  verified: number;
   seconds: number;
   warning?: string;
 };
@@ -36,7 +37,7 @@ export type Run = {
 export function summaryBody(state: State, prev: State | undefined, outside: readonly Tracked[], run: Run): string {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const fixed = state.findings.filter((f) => f.status === "fixed" && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
-  const fresh = open.filter((f) => !prev?.findings.some((p) => p.fp === f.fp));
+  const fresh = open.filter((f) => !prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
   const link = (f: Finding) => `[${f.file.split("/").pop()}:${f.line}](https://github.com/${run.repo}/blob/${run.head}/${f.file}#L${f.line})`;
 
   const lines = [`## ReviewPilot: ${state.score}/5`];
@@ -67,7 +68,7 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
   const time = run.seconds >= 60 ? `${Math.floor(run.seconds / 60)}m ${run.seconds % 60}s` : `${run.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.files} files · ${run.candidates} candidates checked · ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.files} files · ${run.candidates === run.verified ? `${run.candidates} candidates checked` : `${run.verified} of ${run.candidates} candidates checked, most severe first`} · ${time}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state),
   );

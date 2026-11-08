@@ -157,6 +157,8 @@ Claims about external tools, package versions, APIs or platform behaviour are on
 
 Confirm only if every step holds. Reject if any step fails or you cannot finish the check. Confirming a false finding costs more than rejecting a real one.
 
+Exception: for a finding reported on an earlier commit, the only question is whether the problem is still in the code. A rejection marks it fixed, so reject only when you can show the current code no longer has it; if you cannot finish the check, confirm it.
+
 Call submit_verdict with the verdict, a one or two sentence reason, the evidence lines you checked ("path:line: code"), and the severity you would give it. When confirming, also give a corrected title and body if the original overstates or misdescribes the problem.`;
 
 function repoSection(config: Config, rules: readonly Rule[], guidance: string): string {
@@ -225,7 +227,7 @@ export type ReviewInput = {
 /** `verdict` is undefined when the check itself failed (timeout, API error): not posted, not marked fixed. */
 export type Checked = { finding: Finding; verdict?: VerdictResult; previous?: Tracked };
 
-export async function review(input: ReviewInput): Promise<{ checked: Checked[]; candidates: number }> {
+export async function review(input: ReviewInput): Promise<{ checked: Checked[]; candidates: number; verified: number }> {
   const { config, diffs, previous, log } = input;
   const changed = diffs.filter((d) => d.status !== "deleted").map((d) => d.path);
   const open = previous.filter((p) => p.status === "open");
@@ -269,7 +271,7 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
     });
   });
   const found = parts.flat().sort(bySeverity);
-  log(`find: ${found.length} candidates`);
+  log(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
 
   const jobs: { finding: Finding; previous?: Tracked }[] = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
@@ -286,7 +288,7 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
       system: VERIFY_SYSTEM,
       user: [
         prev
-          ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head: confirm if it is, reject only if the current code no longer has the problem."
+          ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head (see the exception for earlier findings)."
           : "",
         `Finding:\n${JSON.stringify(
           { file: finding.file, line: finding.line, end_line: finding.endLine, severity: finding.severity, title: finding.title, body: finding.body, evidence: finding.evidence },
@@ -309,7 +311,7 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
     return { finding, ...(verdict ? { verdict } : {}), ...(prev ? { previous: prev } : {}) };
   });
 
-  return { checked, candidates: found.length };
+  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY) };
 }
 
 const Groups = type({ duplicates: "number.integer[][]" });

@@ -16017,7 +16017,7 @@ function readState(body) {
   }
 }
 function writeState(state) {
-  const open = state.findings.filter((f) => f.status === "open");
+  const open = state.findings.filter((f) => f.status === "open").map((f) => ({ ...f, body: f.body.slice(0, 1500), evidence: f.evidence.slice(0, 6).map((e) => e.slice(0, 300)) }));
   const closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
   const json3 = JSON.stringify({ ...state, findings: [...open, ...closed] });
   return `<!-- reviewpilot:state ${Buffer.from(json3).toString("base64")} -->`;
@@ -16332,7 +16332,7 @@ ${fence(f.evidence)}
 function summaryBody(state, prev, outside, run2) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const fixed = state.findings.filter((f) => f.status === "fixed" && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
-  const fresh = open.filter((f) => !prev?.findings.some((p) => p.fp === f.fp));
+  const fresh = open.filter((f) => !prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
   const link = (f) => `[${f.file.split("/").pop()}:${f.line}](https://github.com/${run2.repo}/blob/${run2.head}/${f.file}#L${f.line})`;
   const lines = [`## ReviewPilot: ${state.score}/5`];
   if (prev && prev.head !== state.head) {
@@ -16360,7 +16360,7 @@ function summaryBody(state, prev, outside, run2) {
   const time = run2.seconds >= 60 ? `${Math.floor(run2.seconds / 60)}m ${run2.seconds % 60}s` : `${run2.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.files} files \xB7 ${run2.candidates} candidates checked \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.files} files \xB7 ${run2.candidates === run2.verified ? `${run2.candidates} candidates checked` : `${run2.verified} of ${run2.candidates} candidates checked, most severe first`} \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state)
   );
@@ -16444,7 +16444,8 @@ async function runTool(root, name, args2) {
       const text = await readFile(full, "utf8");
       const lines = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
       const start = Math.max(1, num(args2.start_line, 1));
-      const end = Math.min(lines.length, num(args2.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1);
+      if (start > lines.length) return `${str(args2.path)} has only ${lines.length} lines.`;
+      const end = Math.max(start, Math.min(lines.length, num(args2.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1));
       const body = lines.slice(start - 1, end).map((text2, i) => `${String(start + i).padStart(5)}  ${text2}`).join("\n");
       const more = end < lines.length ? `
 [lines ${end + 1}-${lines.length} not shown]` : "";
@@ -16667,6 +16668,8 @@ Claims about external tools, package versions, APIs or platform behaviour are on
 
 Confirm only if every step holds. Reject if any step fails or you cannot finish the check. Confirming a false finding costs more than rejecting a real one.
 
+Exception: for a finding reported on an earlier commit, the only question is whether the problem is still in the code. A rejection marks it fixed, so reject only when you can show the current code no longer has it; if you cannot finish the check, confirm it.
+
 Call submit_verdict with the verdict, a one or two sentence reason, the evidence lines you checked ("path:line: code"), and the severity you would give it. When confirming, also give a corrected title and body if the original overstates or misdescribes the problem.`;
 function repoSection(config, rules, guidance) {
   const parts = [];
@@ -16754,7 +16757,7 @@ ${d.numbered}`).join("\n\n")}`
     });
   });
   const found = parts.flat().sort(bySeverity);
-  log2(`find: ${found.length} candidates`);
+  log2(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
   const jobs = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
     // An earlier finding is re-checked only when its file is in the reviewed diff. Without
@@ -16768,7 +16771,7 @@ ${d.numbered}`).join("\n\n")}`
       root: input2.root,
       system: VERIFY_SYSTEM,
       user: [
-        prev ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head: confirm if it is, reject only if the current code no longer has the problem." : "",
+        prev ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head (see the exception for earlier findings)." : "",
         `Finding:
 ${JSON.stringify(
           { file: finding.file, line: finding.line, end_line: finding.endLine, severity: finding.severity, title: finding.title, body: finding.body, evidence: finding.evidence },
@@ -16790,7 +16793,7 @@ ${patchOf(finding.file)}`
     if (verdict) log2(`verify ${verdict.verdict}: ${finding.file}:${finding.line} ${finding.title} (${verdict.reason.slice(0, 160)})`);
     return { finding, ...verdict ? { verdict } : {}, ...prev ? { previous: prev } : {} };
   });
-  return { checked, candidates: found.length };
+  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY) };
 }
 var Groups = type({ duplicates: "number.integer[][]" });
 async function dedupe(llm, root, findings, known, log2) {
@@ -16883,7 +16886,7 @@ async function main() {
     const model = input("model") ?? config.model.name;
     const verifyModel = input("verify_model") ?? config.model.verify;
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
-    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter((d) => !ignored(config, d.path));
+    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter((d) => !ignored(config, d.path) && d.commentable.size > 0);
     let size = 0;
     const diffs = reviewable.filter((d) => {
       if (size + d.numbered.length > MAX_DIFF_CHARS) return false;
@@ -16901,13 +16904,13 @@ ${text}` : "";
     for (const t of threads) {
       const fp = t.comments[0]?.body.match(FINDING_TAG)?.[1];
       const tracked = previous.find((p) => p.fp === fp && p.status === "open");
-      const replied = t.comments.slice(1).some((c) => !c.author.endsWith("[bot]"));
+      const replied = t.comments.slice(1).some((c) => c.author !== "" && !c.author.endsWith("[bot]"));
       if (tracked && (t.resolved || replied)) tracked.status = "dismissed";
     }
     const llm = (m) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates } = await review({
+    const { checked, candidates, verified } = await review({
       find,
       verify,
       root,
@@ -16956,6 +16959,7 @@ ${text}` : "";
       model: verifyModel === model ? model : `${model} (verify: ${verifyModel})`,
       files: diffs.length,
       candidates,
+      verified,
       seconds: Math.round((Date.now() - started) / 1e3),
       ...warningText ? { warning: warningText } : {}
     };
@@ -16983,16 +16987,16 @@ ${summaryBody(state, prev, outside, run2)}`);
         if (c) f.commentId = c.id;
       }
     }
-    for (const f of fixedNow) {
-      if (!f.commentId) continue;
-      await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e) => log(`Reply on ${f.fp} failed: ${String(e)}`));
-      await new Promise((r) => setTimeout(r, 1500));
-    }
     const body = summaryBody(state, prev, outside, run2);
     if (summaryId) await gh.editComment(summaryId, body);
     else await gh.comment(number2, body);
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}
 `);
+    for (const f of fixedNow) {
+      if (!f.commentId) continue;
+      await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e) => log(`Reply on ${f.fp} failed: ${String(e)}`));
+      await new Promise((r) => setTimeout(r, 1500));
+    }
   } catch (e) {
     if (!dryRun && summaryId) {
       const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;

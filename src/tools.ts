@@ -85,7 +85,8 @@ export async function runTool(root: string, name: string, args: Record<string, u
       const text = await readFile(full, "utf8");
       const lines = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
       const start = Math.max(1, num(args.start_line, 1));
-      const end = Math.min(lines.length, num(args.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1);
+      if (start > lines.length) return `${str(args.path)} has only ${lines.length} lines.`;
+      const end = Math.max(start, Math.min(lines.length, num(args.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1));
       const body = lines
         .slice(start - 1, end)
         .map((text, i) => `${String(start + i).padStart(5)}  ${text}`)

@@ -78,7 +78,9 @@ async function main() {
     const verifyModel = input("verify_model") ?? config.model.verify;
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
 
-    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter((d) => !ignored(config, d.path));
+    // Files without hunks (binary, mode-only changes) have nothing to review.
+    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore))
+      .filter((d) => !ignored(config, d.path) && d.commentable.size > 0);
     // Fill the budget file by file; a file that does not fit is skipped, later ones still get in.
     let size = 0;
     const diffs = reviewable.filter((d) => {
@@ -101,14 +103,14 @@ async function main() {
     for (const t of threads) {
       const fp = t.comments[0]?.body.match(FINDING_TAG)?.[1];
       const tracked = previous.find((p) => p.fp === fp && p.status === "open");
-      const replied = t.comments.slice(1).some((c) => !c.author.endsWith("[bot]"));
+      const replied = t.comments.slice(1).some((c) => c.author !== "" && !c.author.endsWith("[bot]"));
       if (tracked && (t.resolved || replied)) tracked.status = "dismissed";
     }
 
     const llm = (m: string) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates } = await review({
+    const { checked, candidates, verified } = await review({
       find,
       verify,
       root,
@@ -168,6 +170,7 @@ async function main() {
       model: verifyModel === model ? model : `${model} (verify: ${verifyModel})`,
       files: diffs.length,
       candidates,
+      verified,
       seconds: Math.round((Date.now() - started) / 1000),
       ...(warningText ? { warning: warningText } : {}),
     };
@@ -193,16 +196,18 @@ async function main() {
         if (c) f.commentId = c.id;
       }
     }
+    // Save the state right after the inline comments exist, so a later failure cannot
+    // make the next run post them again.
+    const body = summaryBody(state, prev, outside, run);
+    if (summaryId) await gh.editComment(summaryId, body);
+    else await gh.comment(number, body);
+    if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}\n`);
     // Paced: GitHub's secondary rate limit rejects bursts of new comments.
     for (const f of fixedNow) {
       if (!f.commentId) continue;
       await gh.reply(number, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e: unknown) => log(`Reply on ${f.fp} failed: ${String(e)}`));
       await new Promise((r) => setTimeout(r, 1500));
     }
-    const body = summaryBody(state, prev, outside, run);
-    if (summaryId) await gh.editComment(summaryId, body);
-    else await gh.comment(number, body);
-    if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}\n`);
   } catch (e) {
     // Put the previous summary back so a failed run never wipes the PR's history; on a
     // first run, say it failed instead of leaving "reviewing..." up.
