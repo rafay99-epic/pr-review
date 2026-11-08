@@ -1,3 +1,5 @@
+<img src="assets/logo.png" width="64" alt="ReviewPilot logo: code brackets around a green check">
+
 # ReviewPilot
 
 An open-source PR reviewer that reads the code it needs, re-checks every finding against that code, and posts only what it can prove. Bring your own model key. No dashboard, no server.
