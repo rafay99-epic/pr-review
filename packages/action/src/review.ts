@@ -254,7 +254,8 @@ export async function review(
     ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p })),
   ];
 
-  const patchOf = (file: string) => diffs.find((d) => d.path === file)?.numbered ?? "(file not in the diff)";
+  const patchOf = (file: string) =>
+    diffs.find((d) => d.path === file)?.numbered ?? "(This file is not changed in the PR. Open it with read_file, and check what in the diff it depends on.)";
   const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
     const verdict = await runAgent({
       llm: input.verify,

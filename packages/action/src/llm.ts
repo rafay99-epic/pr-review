@@ -111,6 +111,10 @@ export function createLlm(opts: {
       }
       if (!data) throw new Error(`${opts.model}: response is not a chat completion: ${text.slice(0, 200)}`);
       const message = data.choices?.[0]?.message;
+      if (!message && attempt < 4 && left() > 15_000) {
+        await sleep(2 ** attempt * 3000);
+        continue;
+      }
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;
       usage.prompt += data.usage?.prompt_tokens ?? 0;

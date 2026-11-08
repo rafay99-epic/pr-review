@@ -16201,7 +16201,13 @@ function parseDiff(raw) {
 }
 function anchor(file, start, end) {
   if (!file) return void 0;
-  const last = [end, start].find((n) => file.commentable.has(n));
+  let last;
+  for (let n = end; n >= start; n--) {
+    if (file.commentable.has(n)) {
+      last = n;
+      break;
+    }
+  }
   if (last === void 0) return void 0;
   const first = start < last && file.commentable.has(start) && file.hunkOf.get(start) === file.hunkOf.get(last) ? start : void 0;
   return first === void 0 ? { line: last } : { line: last, startLine: first };
@@ -16477,6 +16483,10 @@ function createLlm(opts) {
       }
       if (!data) throw new Error(`${opts.model}: response is not a chat completion: ${text.slice(0, 200)}`);
       const message = data.choices?.[0]?.message;
+      if (!message && attempt < 4 && left() > 15e3) {
+        await sleep2(2 ** attempt * 3e3);
+        continue;
+      }
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;
       usage.prompt += data.usage?.prompt_tokens ?? 0;
@@ -16612,7 +16622,7 @@ var progressBody = (head, prev) => [
 // src/tools.ts
 import { execFile as execFile2 } from "node:child_process";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { promisify as promisify2 } from "node:util";
 var run = promisify2(execFile2);
 var MAX_LINES = 250;
@@ -16715,7 +16725,9 @@ ${capped}${more}`;
     if (name === "list_dir") {
       const full = await inside(root, str(args2.path) || ".");
       if (!full || !(await stat(full)).isDirectory()) return "Error: not a directory in the repository.";
-      const entries = (await readdir(full, { withFileTypes: true })).filter((e) => e.name !== ".git").map((e) => e.isDirectory() ? `${e.name}/` : e.name).sort();
+      const dirents = (await readdir(full, { withFileTypes: true })).filter((e) => e.name !== ".git");
+      const isDir = async (e) => e.isDirectory() || e.isSymbolicLink() && await inside(root, join(str(args2.path) || ".", e.name)).then((p) => p ? stat(p) : void 0).then((s) => s?.isDirectory() ?? false);
+      const entries = (await Promise.all(dirents.map(async (e) => await isDir(e) ? `${e.name}/` : e.name))).sort();
       const more = entries.length > MAX_ENTRIES ? `
 [${entries.length - MAX_ENTRIES} more entries not shown]` : "";
       return entries.slice(0, MAX_ENTRIES).join("\n") + more;
@@ -16976,7 +16988,7 @@ ${d.numbered}`).join("\n\n")}`
     // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
     ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p }))
   ];
-  const patchOf = (file) => diffs.find((d) => d.path === file)?.numbered ?? "(file not in the diff)";
+  const patchOf = (file) => diffs.find((d) => d.path === file)?.numbered ?? "(This file is not changed in the PR. Open it with read_file, and check what in the diff it depends on.)";
   const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
     const verdict = await runAgent({
       llm: input2.verify,

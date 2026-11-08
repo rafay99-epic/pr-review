@@ -43,6 +43,8 @@ test("anchor keeps comments inside one hunk and drops lines outside the diff", (
   assert.deepEqual(anchor(a, 12, 41), { line: 41 });
   assert.deepEqual(anchor(a, 30, 30), undefined);
   assert.deepEqual(anchor(a, 30, 41), { line: 41 });
+  // A range ending on unchanged code anchors on its last changed line.
+  assert.deepEqual(anchor(a, 11, 20), { line: 13, startLine: 11 });
 });
 
 test("score comes from severities only", () => {
