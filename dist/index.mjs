@@ -16264,8 +16264,9 @@ function createLlm(opts) {
       }).catch((e) => ({ ok: false, status: 0, error: e }));
       const retryable = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);
       if (retryable && attempt < 4) {
-        const after = "headers" in res ? Number(res.headers.get("retry-after")) : NaN;
-        await sleep(Number.isFinite(after) && after > 0 ? after * 1e3 : 2 ** attempt * 3e3);
+        const header = "headers" in res ? res.headers.get("retry-after") : null;
+        const wait = header ? Number(header) * 1e3 || Date.parse(header) - Date.now() : NaN;
+        await sleep(Number.isFinite(wait) && wait > 0 ? Math.min(wait, 6e4) : 2 ** attempt * 3e3);
         continue;
       }
       if (!res.ok) {
@@ -16355,7 +16356,7 @@ var progressBody = (head, prev) => [
 
 // src/tools.ts
 import { execFile as execFile2 } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { promisify as promisify2 } from "node:util";
 var run = promisify2(execFile2);
@@ -16406,19 +16407,20 @@ var TOOL_SPECS = [
     }
   }
 ];
-function inside(root, path) {
-  const full = resolve(root, path);
-  const rel = relative(root, full);
+async function inside(root, path) {
+  const real = await realpath(resolve(root, path)).catch(() => void 0);
+  if (!real) return void 0;
+  const rel = relative(await realpath(root), real);
   if (rel.startsWith("..") || rel.split(sep)[0] === ".git") return void 0;
-  return full;
+  return real;
 }
 var num = (v, fallback) => typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : fallback;
 var str = (v) => typeof v === "string" ? v : "";
 async function runTool(root, name, args2) {
   try {
     if (name === "read_file") {
-      const full = inside(root, str(args2.path));
-      if (!full) return "Error: path is outside the repository.";
+      const full = await inside(root, str(args2.path));
+      if (!full) return "Error: no such file in the repository.";
       const lines = (await readFile(full, "utf8")).split("\n");
       const start = Math.max(1, num(args2.start_line, 1));
       const end = Math.min(lines.length, num(args2.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1);
@@ -16443,7 +16445,7 @@ ${body}${more}`;
 [${hits.length - MAX_MATCHES} more matches not shown]` : ""}`;
     }
     if (name === "list_dir") {
-      const full = inside(root, str(args2.path) || ".");
+      const full = await inside(root, str(args2.path) || ".");
       if (!full || !(await stat(full)).isDirectory()) return "Error: not a directory in the repository.";
       const entries = await readdir(full, { withFileTypes: true });
       return entries.filter((e) => e.name !== ".git").map((e) => e.isDirectory() ? `${e.name}/` : e.name).sort().join("\n");
@@ -16524,7 +16526,9 @@ var Verdict = type({
   evidence: "string[]",
   severity: Severity2,
   "title?": "string",
-  "body?": "string"
+  "body?": "string",
+  "line?": "number.integer > 0",
+  "end_line?": "number.integer > 0"
 });
 var candidateSchema = {
   type: "object",
@@ -16592,7 +16596,9 @@ var submitVerdict = {
           evidence: { type: "array", items: { type: "string" }, description: 'Lines you checked, each "path:line: code"' },
           severity: { type: "string", enum: SEVERITIES },
           title: { type: "string", description: "Corrected title, if confirmed and the original is off" },
-          body: { type: "string", description: "Corrected body, if confirmed and the original overstates or misdescribes it" }
+          body: { type: "string", description: "Corrected body, if confirmed and the original overstates or misdescribes it" },
+          line: { type: "integer", description: "Corrected first line at the PR head, if the cited one is wrong" },
+          end_line: { type: "integer", description: "Corrected last line, if the cited one is wrong" }
         },
         required: ["verdict", "reason", "evidence", "severity"]
       }
@@ -16632,6 +16638,8 @@ Check, in order:
 2. Trace the trigger: follow the input through the actual code to the wrong result. Open every function, type and caller on the way. Do not assume what any of them do.
 3. Look for anything that already prevents it: a guard, early return, validation, type constraint, a caller that never passes that input, or a test or comment in the PR showing the behaviour is intended. Intent does not clear a security or privacy problem: if the intended behaviour lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, it still counts.
 4. The PR introduced it: the lines are added or changed in the diff, or the diff changed something they depend on.
+
+Claims about external tools, package versions, APIs or platform behaviour are only provable when the repository itself shows the problem (a lockfile, a test, docs or code in the repo). Your memory of a tool's current version or config keys can be out of date: reject such a claim if the repository cannot confirm it.
 
 Confirm only if every step holds. Reject if any step fails or you cannot finish the check. Confirming a false finding costs more than rejecting a real one.
 
@@ -16759,13 +16767,14 @@ ${patchOf(finding.file)}`
   return { checked, candidates: found.length };
 }
 var Groups = type({ duplicates: "number.integer[][]" });
-async function dedupe(llm, root, findings, log2) {
-  if (findings.length < 2) return [...findings];
+async function dedupe(llm, root, findings, known, log2) {
+  if (!findings.length || findings.length + known.length < 2) return [...findings];
+  const list = [...known, ...findings];
   const groups = await runAgent({
     llm,
     root,
     system: "You group code review findings that describe the same underlying defect (same root cause, even if worded differently or cited at different lines). Findings that only share a file or a topic are not duplicates. Answer with submit_groups right away; you do not need the other tools.",
-    user: findings.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}
+    user: list.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}
    ${f.body}`).join("\n"),
     submit: {
       spec: {
@@ -16792,14 +16801,17 @@ async function dedupe(llm, root, findings, log2) {
   }).catch(() => []);
   const drop = /* @__PURE__ */ new Set();
   for (const group of groups) {
-    const [keep, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < findings.length).sort((a, b) => a - b);
-    if (keep !== void 0) for (const i of rest) drop.add(i);
+    const [, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < list.length).sort((a, b) => a - b);
+    for (const i of rest) drop.add(i);
   }
-  if (drop.size) log2(`dedupe: dropped ${drop.size} duplicate finding(s)`);
-  return findings.filter((_, i) => !drop.has(i));
+  const kept = findings.filter((_, i) => !drop.has(i + known.length));
+  if (kept.length < findings.length) log2(`dedupe: dropped ${findings.length - kept.length} duplicate finding(s)`);
+  return kept;
 }
 var settle = (finding, verdict) => ({
   ...finding,
+  line: verdict.line ?? finding.line,
+  endLine: Math.max(verdict.line ?? finding.line, verdict.end_line ?? (verdict.line ? verdict.line : finding.endLine)),
   severity: verdict.severity,
   title: verdict.title?.trim() || finding.title,
   body: verdict.body?.trim() || finding.body,
@@ -16822,6 +16834,7 @@ async function main() {
   const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(await readFile2(process.env.GITHUB_EVENT_PATH, "utf8")) : {};
   const comment = event.comment;
   if (comment && !/^\/review\b/.test(comment.body.trim())) return log("Comment is not /review, nothing to do.");
+  if (comment && !event.issue?.pull_request) return log("Comment is not on a pull request, nothing to do.");
   const number2 = Number(process.env.REVIEWPILOT_PR) || event.pull_request?.number || event.issue?.number;
   if (!number2) return log("No pull request in this event.");
   const gh = createGitHub(token, repo);
@@ -16838,7 +16851,7 @@ async function main() {
   }
   try {
     const mergeBase = await checkoutPr(root, number2, pr.head.sha, pr.base.sha);
-    const trusted = await fetchRef(root, pr.base.ref);
+    const trusted = await fetchRef(root, pr.base.repo.default_branch);
     const { config, warning } = loadConfig(await readAt(root, trusted, ".reviewpilot.yml"));
     if (warning) log(warning);
     const model = input("model") ?? config.model.name;
@@ -16846,7 +16859,11 @@ async function main() {
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
     const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha)).filter((d) => !ignored(config, d.path));
     let size = 0;
-    const diffs = reviewable.filter((d) => (size += d.numbered.length) <= MAX_DIFF_CHARS);
+    const diffs = reviewable.filter((d) => {
+      if (size + d.numbered.length > MAX_DIFF_CHARS) return false;
+      size += d.numbered.length;
+      return true;
+    });
     const skipped = reviewable.length - diffs.length;
     const guidance = (await Promise.all(config.context_files.map(async (f) => {
       const text = await readAt(root, trusted, f);
@@ -16880,15 +16897,19 @@ ${text}` : "";
       if (p.status !== "open") return p;
       const c = checked.find((x) => x.previous?.fp === p.fp);
       if (!c?.verdict) return p;
-      return c.verdict.verdict === "confirmed" ? { ...p, line: c.finding.line } : { ...p, status: "fixed" };
+      return c.verdict.verdict === "confirmed" ? { ...p, ...settle(p, c.verdict), fp: p.fp } : { ...p, status: "fixed" };
     });
     const minRank = SEVERITIES.indexOf(config.review.min_severity);
     const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank).sort(bySeverity);
+    const known = findings.filter((t) => t.status !== "fixed");
     const fresh = [];
-    for (const f of await dedupe(find, root, confirmed, log)) {
+    for (const f of await dedupe(find, root, confirmed, known, log)) {
       const fp = fingerprint(f);
-      const dup = [...findings, ...fresh].some((t) => t.fp === fp || t.status !== "fixed" && sameIssue(t, f));
-      if (!dup && fresh.length < config.review.max_findings) fresh.push({ ...f, fp, status: "open" });
+      if ([...known, ...fresh].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+      if (fresh.length >= config.review.max_findings) break;
+      const reopened = findings.findIndex((t) => t.fp === fp && t.status === "fixed");
+      if (reopened >= 0) findings.splice(reopened, 1);
+      fresh.push({ ...f, fp, status: "open" });
     }
     findings.push(...fresh);
     const open = findings.filter((f) => f.status === "open");
@@ -16945,7 +16966,14 @@ ${summaryBody(state, prev, outside, run2)}`);
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}
 `);
   } catch (e) {
-    if (!dryRun && summaryId && existing) await gh.editComment(summaryId, existing.body).catch(() => void 0);
+    if (!dryRun && summaryId) {
+      const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
+      const body = existing?.body ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
+
+See the [workflow run](${runUrl}). Comment \`/review\` to retry.
+${SUMMARY_TAG}`;
+      await gh.editComment(summaryId, body).catch(() => void 0);
+    }
     throw e;
   }
 }

@@ -60,8 +60,10 @@ export function createLlm(opts: {
 
       const retryable = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);
       if (retryable && attempt < 4) {
-        const after = "headers" in res ? Number(res.headers.get("retry-after")) : NaN;
-        await sleep(Number.isFinite(after) && after > 0 ? after * 1000 : 2 ** attempt * 3000);
+        // Retry-After is either seconds or an HTTP date.
+        const header = "headers" in res ? res.headers.get("retry-after") : null;
+        const wait = header ? (Number(header) * 1000 || Date.parse(header) - Date.now()) : NaN;
+        await sleep(Number.isFinite(wait) && wait > 0 ? Math.min(wait, 60_000) : 2 ** attempt * 3000);
         continue;
       }
       if (!res.ok) {

@@ -8,7 +8,7 @@ export type Pr = {
   title: string;
   body: string | null;
   head: { sha: string };
-  base: { ref: string; sha: string };
+  base: { ref: string; sha: string; repo: { default_branch: string } };
 };
 
 export type IssueComment = { id: number; body: string };

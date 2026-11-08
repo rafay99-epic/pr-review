@@ -49,6 +49,7 @@ async function main() {
     : {};
   const comment = event.comment;
   if (comment && !/^\/review\b/.test(comment.body.trim())) return log("Comment is not /review, nothing to do.");
+  if (comment && !event.issue?.pull_request) return log("Comment is not on a pull request, nothing to do.");
   const number = Number(process.env.REVIEWPILOT_PR) || event.pull_request?.number || event.issue?.number;
   if (!number) return log("No pull request in this event.");
 
@@ -70,7 +71,7 @@ async function main() {
 
   try {
     const mergeBase = await checkoutPr(root, number, pr.head.sha, pr.base.sha);
-    const trusted = await fetchRef(root, pr.base.ref);
+    const trusted = await fetchRef(root, pr.base.repo.default_branch);
     const { config, warning } = loadConfig(await readAt(root, trusted, ".reviewpilot.yml"));
     if (warning) log(warning);
     const model = input("model") ?? config.model.name;
@@ -78,8 +79,13 @@ async function main() {
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
 
     const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha)).filter((d) => !ignored(config, d.path));
+    // Fill the budget file by file; a file that does not fit is skipped, later ones still get in.
     let size = 0;
-    const diffs = reviewable.filter((d) => (size += d.numbered.length) <= MAX_DIFF_CHARS);
+    const diffs = reviewable.filter((d) => {
+      if (size + d.numbered.length > MAX_DIFF_CHARS) return false;
+      size += d.numbered.length;
+      return true;
+    });
     const skipped = reviewable.length - diffs.length;
 
     const guidance = (
@@ -120,18 +126,24 @@ async function main() {
       if (p.status !== "open") return p;
       const c = checked.find((x) => x.previous?.fp === p.fp);
       if (!c?.verdict) return p;
-      return c.verdict.verdict === "confirmed" ? { ...p, line: c.finding.line } : { ...p, status: "fixed" as const };
+      return c.verdict.verdict === "confirmed" ? { ...p, ...settle(p, c.verdict), fp: p.fp } : { ...p, status: "fixed" as const };
     });
     const minRank = SEVERITIES.indexOf(config.review.min_severity);
     const confirmed = checked
       .flatMap((c) => (!c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []))
       .filter((f) => SEVERITIES.indexOf(f.severity) <= minRank)
       .sort(bySeverity);
+    // Drop findings that repeat each other or an earlier open or dismissed one. A finding
+    // that matches a fixed one was reintroduced: it replaces the fixed entry and posts again.
+    const known = findings.filter((t) => t.status !== "fixed");
     const fresh: Tracked[] = [];
-    for (const f of await dedupe(find, root, confirmed, log)) {
+    for (const f of await dedupe(find, root, confirmed, known, log)) {
       const fp = fingerprint(f);
-      const dup = [...findings, ...fresh].some((t) => t.fp === fp || (t.status !== "fixed" && sameIssue(t, f)));
-      if (!dup && fresh.length < config.review.max_findings) fresh.push({ ...f, fp, status: "open" });
+      if ([...known, ...fresh].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+      if (fresh.length >= config.review.max_findings) break;
+      const reopened = findings.findIndex((t) => t.fp === fp && t.status === "fixed");
+      if (reopened >= 0) findings.splice(reopened, 1);
+      fresh.push({ ...f, fp, status: "open" });
     }
     findings.push(...fresh);
 
@@ -189,8 +201,13 @@ async function main() {
     else await gh.comment(number, body);
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}\n`);
   } catch (e) {
-    // Put the previous summary back so a failed run never wipes the PR's history.
-    if (!dryRun && summaryId && existing) await gh.editComment(summaryId, existing.body).catch(() => undefined);
+    // Put the previous summary back so a failed run never wipes the PR's history; on a
+    // first run, say it failed instead of leaving "reviewing..." up.
+    if (!dryRun && summaryId) {
+      const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
+      const body = existing?.body ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}\n\nSee the [workflow run](${runUrl}). Comment \`/review\` to retry.\n${SUMMARY_TAG}`;
+      await gh.editComment(summaryId, body).catch(() => undefined);
+    }
     throw e;
   }
 }

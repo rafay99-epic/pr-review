@@ -46,6 +46,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Run the PR's own TypeScript, not whatever dist/ was committed, and fail if the
+      # committed bundle is stale (other repos run dist/ as committed).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: corepack enable && pnpm install --frozen-lockfile && pnpm test && pnpm typecheck && pnpm build
+      - run: git diff --exit-code -- dist || (echo "::error::dist/ is stale, run pnpm build and commit it" && exit 1)
+
       - uses: ./
         with:
           api_key: ${{ secrets.CMD_API_KEY }}

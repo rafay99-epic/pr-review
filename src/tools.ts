@@ -3,7 +3,7 @@
 // PR code, so a hostile diff can at most make the model read files.
 
 import { execFile } from "node:child_process";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { ToolSpec } from "./llm.ts";
@@ -61,12 +61,17 @@ export const TOOL_SPECS: ToolSpec[] = [
   },
 ];
 
-/** Resolves a model-supplied path inside the repo, or undefined if it escapes it or touches .git. */
-function inside(root: string, path: string): string | undefined {
-  const full = resolve(root, path);
-  const rel = relative(root, full);
+/**
+ * Resolves a model-supplied path inside the repo, or undefined if it escapes it or touches
+ * .git. Symlinks are resolved first: a PR can commit a link to `.git/config` (which holds
+ * the checkout token) or to a file outside the checkout.
+ */
+async function inside(root: string, path: string): Promise<string | undefined> {
+  const real = await realpath(resolve(root, path)).catch(() => undefined);
+  if (!real) return undefined;
+  const rel = relative(await realpath(root), real);
   if (rel.startsWith("..") || rel.split(sep)[0] === ".git") return undefined;
-  return full;
+  return real;
 }
 
 const num = (v: unknown, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : fallback);
@@ -75,8 +80,8 @@ const str = (v: unknown) => (typeof v === "string" ? v : "");
 export async function runTool(root: string, name: string, args: Record<string, unknown>): Promise<string> {
   try {
     if (name === "read_file") {
-      const full = inside(root, str(args.path));
-      if (!full) return "Error: path is outside the repository.";
+      const full = await inside(root, str(args.path));
+      if (!full) return "Error: no such file in the repository.";
       const lines = (await readFile(full, "utf8")).split("\n");
       const start = Math.max(1, num(args.start_line, 1));
       const end = Math.min(lines.length, num(args.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1);
@@ -101,7 +106,7 @@ export async function runTool(root: string, name: string, args: Record<string, u
       return `${shown.join("\n")}${hits.length > MAX_MATCHES ? `\n[${hits.length - MAX_MATCHES} more matches not shown]` : ""}`;
     }
     if (name === "list_dir") {
-      const full = inside(root, str(args.path) || ".");
+      const full = await inside(root, str(args.path) || ".");
       if (!full || !(await stat(full)).isDirectory()) return "Error: not a directory in the repository.";
       const entries = await readdir(full, { withFileTypes: true });
       return entries

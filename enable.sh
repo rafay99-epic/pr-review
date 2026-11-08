@@ -31,12 +31,20 @@ for repo in "$@"; do
     gh secret set REVIEWPILOT_PRIVATE_KEY -R "$repo" < "${REVIEWPILOT_PRIVATE_KEY_FILE:?set REVIEWPILOT_PRIVATE_KEY_FILE}"
   fi
 
-  gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$sha" > /dev/null
+  # Safe to re-run: an existing branch is reset to the default branch tip.
+  if gh api "repos/$repo/git/ref/heads/$branch" > /dev/null 2>&1; then
+    gh api -X PATCH "repos/$repo/git/refs/heads/$branch" -f sha="$sha" -F force=true > /dev/null
+  else
+    gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$sha" > /dev/null
+  fi
+  current=$(gh api "repos/$repo/contents/.github/workflows/reviewpilot.yml?ref=$branch" --jq .sha 2>/dev/null || true)
   gh api -X PUT "repos/$repo/contents/.github/workflows/reviewpilot.yml" \
-    -f message="ci: review PRs with ReviewPilot" -f content="$content" -f branch="$branch" > /dev/null
+    -f message="ci: review PRs with ReviewPilot" -f content="$content" -f branch="$branch" \
+    ${current:+-f sha="$current"} > /dev/null
   if old=$(gh api "repos/$repo/contents/.github/workflows/pr-agent.yml?ref=$branch" --jq .sha 2>/dev/null); then
     gh api -X DELETE "repos/$repo/contents/.github/workflows/pr-agent.yml" \
       -f message="ci: drop the PR-Agent caller" -f sha="$old" -f branch="$branch" > /dev/null
   fi
-  gh pr create -R "$repo" --base "$base" --head "$branch" --title "ci: review PRs with ReviewPilot" --body "$body"
+  gh pr create -R "$repo" --base "$base" --head "$branch" --title "ci: review PRs with ReviewPilot" --body "$body" \
+    || echo "$repo: a PR from $branch is already open, the branch was updated"
 done

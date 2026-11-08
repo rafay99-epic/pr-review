@@ -33,6 +33,8 @@ const Verdict = type({
   severity: Severity,
   "title?": "string",
   "body?": "string",
+  "line?": "number.integer > 0",
+  "end_line?": "number.integer > 0",
 });
 
 const candidateSchema = {
@@ -107,6 +109,8 @@ const submitVerdict: Submit<VerdictResult> = {
           severity: { type: "string", enum: SEVERITIES },
           title: { type: "string", description: "Corrected title, if confirmed and the original is off" },
           body: { type: "string", description: "Corrected body, if confirmed and the original overstates or misdescribes it" },
+          line: { type: "integer", description: "Corrected first line at the PR head, if the cited one is wrong" },
+          end_line: { type: "integer", description: "Corrected last line, if the cited one is wrong" },
         },
         required: ["verdict", "reason", "evidence", "severity"],
       },
@@ -148,6 +152,8 @@ Check, in order:
 2. Trace the trigger: follow the input through the actual code to the wrong result. Open every function, type and caller on the way. Do not assume what any of them do.
 3. Look for anything that already prevents it: a guard, early return, validation, type constraint, a caller that never passes that input, or a test or comment in the PR showing the behaviour is intended. Intent does not clear a security or privacy problem: if the intended behaviour lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, it still counts.
 4. The PR introduced it: the lines are added or changed in the diff, or the diff changed something they depend on.
+
+Claims about external tools, package versions, APIs or platform behaviour are only provable when the repository itself shows the problem (a lockfile, a test, docs or code in the repo). Your memory of a tool's current version or config keys can be out of date: reject such a claim if the repository cannot confirm it.
 
 Confirm only if every step holds. Reject if any step fails or you cannot finish the check. Confirming a false finding costs more than rejecting a real one.
 
@@ -308,14 +314,22 @@ const Groups = type({ duplicates: "number.integer[][]" });
  * Drops findings that describe the same defect as an earlier one in the list (the find
  * parts overlap, so one bug can arrive twice in different words). One small call.
  */
-export async function dedupe(llm: Llm, root: string, findings: readonly Finding[], log: (l: string) => void): Promise<Finding[]> {
-  if (findings.length < 2) return [...findings];
+export async function dedupe(
+  llm: Llm,
+  root: string,
+  findings: readonly Finding[],
+  /** Findings already tracked on the PR: anything matching one of them is dropped. */
+  known: readonly Finding[],
+  log: (l: string) => void,
+): Promise<Finding[]> {
+  if (!findings.length || findings.length + known.length < 2) return [...findings];
+  const list = [...known, ...findings];
   const groups = await runAgent({
     llm,
     root,
     system:
       "You group code review findings that describe the same underlying defect (same root cause, even if worded differently or cited at different lines). Findings that only share a file or a topic are not duplicates. Answer with submit_groups right away; you do not need the other tools.",
-    user: findings.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}\n   ${f.body}`).join("\n"),
+    user: list.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}\n   ${f.body}`).join("\n"),
     submit: {
       spec: {
         type: "function",
@@ -338,19 +352,23 @@ export async function dedupe(llm: Llm, root: string, findings: readonly Finding[
     deadline: Date.now() + 60_000,
     log: () => {},
   }).catch(() => [] as number[][]);
+  // Indices below known.length are tracked findings. In each group keep the first entry
+  // (a tracked one if present, else the most severe new one) and drop the rest.
   const drop = new Set<number>();
   for (const group of groups) {
-    // Keep the most severe finding of each group (the list is sorted by severity).
-    const [keep, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < findings.length).sort((a, b) => a - b);
-    if (keep !== undefined) for (const i of rest) drop.add(i);
+    const [, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < list.length).sort((a, b) => a - b);
+    for (const i of rest) drop.add(i);
   }
-  if (drop.size) log(`dedupe: dropped ${drop.size} duplicate finding(s)`);
-  return findings.filter((_, i) => !drop.has(i));
+  const kept = findings.filter((_, i) => !drop.has(i + known.length));
+  if (kept.length < findings.length) log(`dedupe: dropped ${findings.length - kept.length} duplicate finding(s)`);
+  return kept;
 }
 
 /** Applies the verifier's corrections to a confirmed finding. */
 export const settle = (finding: Finding, verdict: VerdictResult): Finding => ({
   ...finding,
+  line: verdict.line ?? finding.line,
+  endLine: Math.max(verdict.line ?? finding.line, verdict.end_line ?? (verdict.line ? verdict.line : finding.endLine)),
   severity: verdict.severity satisfies Severity,
   title: verdict.title?.trim() || finding.title,
   body: verdict.body?.trim() || finding.body,
