@@ -51,6 +51,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          # pnpm comes from corepack in the next step, so setup-node cannot cache it yet.
+          package-manager-cache: false
       - run: corepack enable && pnpm install --frozen-lockfile && pnpm test && pnpm typecheck && pnpm build
       - run: git diff --exit-code -- dist || (echo "::error::dist/ is stale, run pnpm build and commit it" && exit 1)
 
