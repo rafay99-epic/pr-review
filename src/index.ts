@@ -110,7 +110,7 @@ async function main() {
     const llm = (m: string) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates, verified } = await review({
+    const { checked, candidates, verified, failedParts, parts } = await review({
       find,
       verify,
       root,
@@ -167,7 +167,11 @@ async function main() {
     }
     const fixedNow = findings.filter((f) => f.status === "fixed" && f.commentId && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
 
-    const warningText = [warning, skipped > 0 ? `${skipped} files did not fit in the review budget and were not reviewed.` : ""].filter(Boolean).join(" ");
+    const warningText = [
+      warning,
+      skipped > 0 ? `${skipped} files did not fit in the review budget and were not reviewed.` : "",
+      failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : "",
+    ].filter(Boolean).join(" ");
     const run = {
       repo,
       head: pr.head.sha,

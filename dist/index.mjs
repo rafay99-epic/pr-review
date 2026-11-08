@@ -16382,6 +16382,7 @@ import { promisify as promisify2 } from "node:util";
 var run = promisify2(execFile2);
 var MAX_LINES = 250;
 var MAX_MATCHES = 150;
+var MAX_BYTES = 2 * 1024 * 1024;
 var TOOL_SPECS = [
   {
     type: "function",
@@ -16441,6 +16442,7 @@ async function runTool(root, name, args2) {
     if (name === "read_file") {
       const full = await inside(root, str(args2.path));
       if (!full) return "Error: no such file in the repository.";
+      if ((await stat(full)).size > MAX_BYTES) return `${str(args2.path)} is larger than 2 MB, which is too big to read; use search instead.`;
       const text = await readFile(full, "utf8");
       const lines = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
       const start = Math.max(1, num(args2.start_line, 1));
@@ -16753,10 +16755,11 @@ ${d.numbered}`).join("\n\n")}`
       log: (line) => log2(`[part ${i + 1}] ${line}`)
     }).catch((e) => {
       log2(`[part ${i + 1}] find failed: ${e instanceof Error ? e.message : String(e)}`);
-      return [];
+      return void 0;
     });
   });
-  const found = parts.flat().sort(bySeverity);
+  const failedParts = parts.filter((p) => p === void 0).length;
+  const found = parts.flatMap((p) => p ?? []).sort(bySeverity);
   log2(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
   const jobs = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
@@ -16793,9 +16796,9 @@ ${patchOf(finding.file)}`
     if (verdict) log2(`verify ${verdict.verdict}: ${finding.file}:${finding.line} ${finding.title} (${verdict.reason.slice(0, 160)})`);
     return { finding, ...verdict ? { verdict } : {}, ...prev ? { previous: prev } : {} };
   });
-  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY) };
+  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY), failedParts, parts: chunks.length };
 }
-var Groups = type({ duplicates: "number.integer[][]" });
+var Groups = type({ duplicates: "string[][]" });
 async function dedupe(llm, root, findings, known, log2) {
   if (!findings.length || findings.length + known.length < 2) return [...findings];
   const list = [...known, ...findings];
@@ -16803,7 +16806,7 @@ async function dedupe(llm, root, findings, known, log2) {
     llm,
     root,
     system: "You group code review findings that describe the same underlying defect (same root cause, even if worded differently or cited at different lines). Findings that only share a file or a topic are not duplicates. Answer with submit_groups right away; you do not need the other tools.",
-    user: list.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}
+    user: list.map((f, i) => `[f${i}] ${f.file}:${f.line} [${f.severity}] ${f.title}
    ${f.body}`).join("\n"),
     submit: {
       spec: {
@@ -16813,7 +16816,9 @@ async function dedupe(llm, root, findings, known, log2) {
           description: "Submit groups of duplicate finding numbers. Omit findings that have no duplicate.",
           parameters: {
             type: "object",
-            properties: { duplicates: { type: "array", items: { type: "array", items: { type: "integer" } } } },
+            properties: {
+              duplicates: { type: "array", items: { type: "array", items: { type: "string" } }, description: 'Groups of ids exactly as listed, e.g. [["f0", "f3"]]' }
+            },
             required: ["duplicates"]
           }
         }
@@ -16830,7 +16835,8 @@ async function dedupe(llm, root, findings, known, log2) {
   }).catch(() => []);
   const drop = /* @__PURE__ */ new Set();
   for (const group of groups) {
-    const [, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < list.length).sort((a, b) => a - b);
+    const ids = group.map((id) => Number(/^f(\d+)$/.exec(id.trim())?.[1] ?? NaN));
+    const [, ...rest] = [...new Set(ids)].filter((i) => Number.isInteger(i) && i >= 0 && i < list.length).sort((a, b) => a - b);
     for (const i of rest) drop.add(i);
   }
   const kept = findings.filter((_, i) => !drop.has(i + known.length));
@@ -16910,7 +16916,7 @@ ${text}` : "";
     const llm = (m) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates, verified } = await review({
+    const { checked, candidates, verified, failedParts, parts } = await review({
       find,
       verify,
       root,
@@ -16954,7 +16960,11 @@ ${text}` : "";
       else outside.push(f);
     }
     const fixedNow = findings.filter((f) => f.status === "fixed" && f.commentId && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
-    const warningText = [warning, skipped > 0 ? `${skipped} files did not fit in the review budget and were not reviewed.` : ""].filter(Boolean).join(" ");
+    const warningText = [
+      warning,
+      skipped > 0 ? `${skipped} files did not fit in the review budget and were not reviewed.` : "",
+      failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : ""
+    ].filter(Boolean).join(" ");
     const run2 = {
       repo,
       head: pr.head.sha,

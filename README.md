@@ -42,7 +42,12 @@ permissions:
   pull-requests: write
 jobs:
   review:
-    if: github.event_name == 'pull_request' || startsWith(github.event.comment.body, '/review')
+    # Comment-triggered runs get your secrets even on public repos, so only maintainers'
+    # /review comments run. Fork PRs never receive secrets, so they are skipped too.
+    if: >-
+      (github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork)
+      || (github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
+        && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

@@ -227,7 +227,9 @@ export type ReviewInput = {
 /** `verdict` is undefined when the check itself failed (timeout, API error): not posted, not marked fixed. */
 export type Checked = { finding: Finding; verdict?: VerdictResult; previous?: Tracked };
 
-export async function review(input: ReviewInput): Promise<{ checked: Checked[]; candidates: number; verified: number }> {
+export async function review(
+  input: ReviewInput,
+): Promise<{ checked: Checked[]; candidates: number; verified: number; failedParts: number; parts: number }> {
   const { config, diffs, previous, log } = input;
   const changed = diffs.filter((d) => d.status !== "deleted").map((d) => d.path);
   const open = previous.filter((p) => p.status === "open");
@@ -267,10 +269,11 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
       log: (line) => log(`[part ${i + 1}] ${line}`),
     }).catch((e: unknown) => {
       log(`[part ${i + 1}] find failed: ${e instanceof Error ? e.message : String(e)}`);
-      return [] as Finding[];
+      return undefined;
     });
   });
-  const found = parts.flat().sort(bySeverity);
+  const failedParts = parts.filter((p) => p === undefined).length;
+  const found = parts.flatMap((p) => p ?? []).sort(bySeverity);
   log(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
 
   const jobs: { finding: Finding; previous?: Tracked }[] = [
@@ -311,10 +314,10 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
     return { finding, ...(verdict ? { verdict } : {}), ...(prev ? { previous: prev } : {}) };
   });
 
-  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY) };
+  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY), failedParts, parts: chunks.length };
 }
 
-const Groups = type({ duplicates: "number.integer[][]" });
+const Groups = type({ duplicates: "string[][]" });
 
 /**
  * Drops findings that describe the same defect as an earlier one in the list (the find
@@ -335,7 +338,7 @@ export async function dedupe(
     root,
     system:
       "You group code review findings that describe the same underlying defect (same root cause, even if worded differently or cited at different lines). Findings that only share a file or a topic are not duplicates. Answer with submit_groups right away; you do not need the other tools.",
-    user: list.map((f, i) => `${i}. ${f.file}:${f.line} [${f.severity}] ${f.title}\n   ${f.body}`).join("\n"),
+    user: list.map((f, i) => `[f${i}] ${f.file}:${f.line} [${f.severity}] ${f.title}\n   ${f.body}`).join("\n"),
     submit: {
       spec: {
         type: "function",
@@ -344,7 +347,9 @@ export async function dedupe(
           description: "Submit groups of duplicate finding numbers. Omit findings that have no duplicate.",
           parameters: {
             type: "object",
-            properties: { duplicates: { type: "array", items: { type: "array", items: { type: "integer" } } } },
+            properties: {
+              duplicates: { type: "array", items: { type: "array", items: { type: "string" } }, description: 'Groups of ids exactly as listed, e.g. [["f0", "f3"]]' },
+            },
             required: ["duplicates"],
           },
         },
@@ -357,12 +362,13 @@ export async function dedupe(
     maxTurns: 2,
     deadline: Date.now() + 60_000,
     log: () => {},
-  }).catch(() => [] as number[][]);
+  }).catch(() => [] as string[][]);
   // Indices below known.length are tracked findings. In each group keep the first entry
   // (a tracked one if present, else the most severe new one) and drop the rest.
   const drop = new Set<number>();
   for (const group of groups) {
-    const [, ...rest] = [...new Set(group)].filter((i) => i >= 0 && i < list.length).sort((a, b) => a - b);
+    const ids = group.map((id) => Number(/^f(\d+)$/.exec(id.trim())?.[1] ?? NaN));
+    const [, ...rest] = [...new Set(ids)].filter((i) => Number.isInteger(i) && i >= 0 && i < list.length).sort((a, b) => a - b);
     for (const i of rest) drop.add(i);
   }
   const kept = findings.filter((_, i) => !drop.has(i + known.length));
