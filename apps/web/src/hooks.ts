@@ -59,16 +59,17 @@ export function useStackMotion(ref: RefObject<HTMLElement | null>) {
   }, [ref]);
 }
 
-/** Counts from 0 to `to` once, over `ms`, the first time the element is in view. */
+/**
+ * Counts from 0 to `to` once, over `ms`, the first time the element is in view. The element
+ * renders the real number; it is only reset to 0 here, right before the count can play, so
+ * print, previews and reduced motion always show the true value.
+ */
 export function useCountUp<T extends HTMLElement>(to: number, ms = 1400) {
   const ref = useRef<T>(null);
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    if (reduced()) {
-      el.textContent = String(to);
-      return;
-    }
+    if (!el || reduced() || el.getBoundingClientRect().top < window.innerHeight) return;
+    el.textContent = "0";
     let frame = 0;
     const io = new IntersectionObserver(([entry]) => {
       if (!entry?.isIntersecting) return;

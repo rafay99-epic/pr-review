@@ -26,7 +26,7 @@ function Count({ to, label, tone }: { to: number; label: string; tone: string })
   return (
     <div data-reveal className="border-t border-line pt-5">
       <span ref={ref} className={`font-serif text-7xl leading-none tabular-nums md:text-8xl ${tone}`}>
-        0
+        {to}
       </span>
       <p className="mt-3 text-mute">{label}</p>
     </div>
