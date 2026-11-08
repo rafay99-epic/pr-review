@@ -8533,10 +8533,10 @@ var ArkError = class _ArkError extends CastableBase {
     const data = ctx.data;
     if (input2.code === "union") {
       input2.errors = input2.errors.flatMap((innerError) => {
-        const flat = innerError.hasCode("union") ? innerError.errors : [innerError];
+        const flat2 = innerError.hasCode("union") ? innerError.errors : [innerError];
         if (!prefixPath && !relativePath)
-          return flat;
-        return flat.map((e) => e.transform((e2) => ({
+          return flat2;
+        return flat2.map((e) => e.transform((e2) => ({
           ...e2,
           path: conflatenateAll(prefixPath, e2.path, relativePath)
         })));
@@ -16017,7 +16017,10 @@ function readState(body) {
   }
 }
 function writeState(state) {
-  return `<!-- reviewpilot:state ${Buffer.from(JSON.stringify(state)).toString("base64")} -->`;
+  const open = state.findings.filter((f) => f.status === "open");
+  const closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
+  const json3 = JSON.stringify({ ...state, findings: [...open, ...closed] });
+  return `<!-- reviewpilot:state ${Buffer.from(json3).toString("base64")} -->`;
 }
 var SUMMARY_TAG = "<!-- reviewpilot:summary -->";
 var findingTag = (fp) => `<!-- reviewpilot:fp=${fp} -->`;
@@ -16128,6 +16131,8 @@ function parseDiff(raw) {
     else if (text.startsWith("rename to ")) {
       file.status = "renamed";
       file.path = text.slice("rename to ".length);
+    } else if (text.startsWith("+++ b/")) {
+      file.path = text.slice("+++ b/".length);
     } else if (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index ")) {
       continue;
     } else if (text.startsWith("@@")) {
@@ -16162,7 +16167,7 @@ function anchor(file, start, end) {
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var exec = promisify(execFile);
-var git = async (root, ...args2) => (await exec("git", args2, { cwd: root, maxBuffer: 64 * 1024 * 1024 })).stdout;
+var git = async (root, ...args2) => (await exec("git", args2, { cwd: root, maxBuffer: 256 * 1024 * 1024 })).stdout;
 async function checkoutPr(root, pr, head, baseSha) {
   if ((await git(root, "rev-parse", "--is-shallow-repository")).trim() === "true") {
     await git(root, "fetch", "--no-tags", "--unshallow", "origin");
@@ -16171,7 +16176,21 @@ async function checkoutPr(root, pr, head, baseSha) {
   await git(root, "checkout", "--quiet", "--detach", head);
   return (await git(root, "merge-base", baseSha, head)).trim();
 }
-var diff = (root, from, to) => git(root, "diff", "--no-color", "--no-ext-diff", "-M", "--unified=5", from, to);
+var diff = (root, from, to, ignore) => git(
+  root,
+  "-c",
+  "core.quotePath=off",
+  "diff",
+  "--no-color",
+  "--no-ext-diff",
+  "-M",
+  "--unified=5",
+  from,
+  to,
+  "--",
+  ".",
+  ...ignore.map((g) => `:(glob,exclude)${g}`)
+);
 var readAt = (root, ref, path) => git(root, "show", `${ref}:${path}`).catch(() => void 0);
 async function fetchRef(root, branch) {
   await git(root, "fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/reviewpilot/default`);
@@ -16292,13 +16311,14 @@ function createLlm(opts) {
 // src/render.ts
 var ORDER = { critical: 0, major: 1, minor: 2 };
 var bySeverity = (a, b) => ORDER[a.severity] - ORDER[b.severity];
+var flat = (text) => text.replace(/\s+/g, " ").trim();
 var fence = (lines) => `\`\`\`text
 ${lines.join("\n").replaceAll("```", "'''")}
 \`\`\``;
 function inlineBody(f) {
   const tag = f.rule ? ` \xB7 rule \`${f.rule}\`` : "";
   return [
-    `**${f.title}** \xB7 ${f.severity}${tag}`,
+    `**${flat(f.title)}** \xB7 ${f.severity}${tag}`,
     "",
     f.body,
     "",
@@ -16322,18 +16342,18 @@ function summaryBody(state, prev, outside, run2) {
   lines.push("");
   if (open.length) {
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
-    for (const f of open) lines.push(`| ${f.severity} | ${f.title.replaceAll("|", "\\|")} | ${link(f)} |`);
+    for (const f of open) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {
     lines.push("No verified issues.");
   }
   if (outside.length) {
     lines.push("", "**Outside the changed lines**", "");
-    for (const f of outside) lines.push(`- **${f.title}** (${link(f)}, ${f.severity}): ${f.body}`);
+    for (const f of outside) lines.push(`- **${flat(f.title)}** (${link(f)}, ${f.severity}): ${flat(f.body)}`);
   }
   if (fixed.length) {
     lines.push("", `<details><summary>Fixed since last review (${fixed.length})</summary>
 `);
-    for (const f of fixed) lines.push(`- ${f.title} (${f.file}:${f.line})`);
+    for (const f of fixed) lines.push(`- ${flat(f.title)} (${f.file}:${f.line})`);
     lines.push("\n</details>");
   }
   if (run2.warning) lines.push("", `> ${run2.warning}`);
@@ -16421,10 +16441,11 @@ async function runTool(root, name, args2) {
     if (name === "read_file") {
       const full = await inside(root, str(args2.path));
       if (!full) return "Error: no such file in the repository.";
-      const lines = (await readFile(full, "utf8")).split("\n");
+      const text = await readFile(full, "utf8");
+      const lines = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
       const start = Math.max(1, num(args2.start_line, 1));
       const end = Math.min(lines.length, num(args2.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1);
-      const body = lines.slice(start - 1, end).map((text, i) => `${String(start + i).padStart(5)}  ${text}`).join("\n");
+      const body = lines.slice(start - 1, end).map((text2, i) => `${String(start + i).padStart(5)}  ${text2}`).join("\n");
       const more = end < lines.length ? `
 [lines ${end + 1}-${lines.length} not shown]` : "";
       return `${str(args2.path)} (${lines.length} lines)
@@ -16434,6 +16455,9 @@ ${body}${more}`;
       const pattern = str(args2.pattern);
       if (!pattern) return "Error: empty pattern.";
       const scope2 = str(args2.path);
+      if (scope2 && (scope2.startsWith("/") || scope2.startsWith(":") || scope2.split("/").includes(".."))) {
+        return "Error: path must be repository-relative.";
+      }
       const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...scope2 ? [scope2] : []];
       const { stdout } = await run("git", argv, { cwd: root, maxBuffer: 8 * 1024 * 1024 }).catch(
         (e) => e.code === 1 ? { stdout: "" } : Promise.reject(e)
@@ -16733,7 +16757,9 @@ ${d.numbered}`).join("\n\n")}`
   log2(`find: ${found.length} candidates`);
   const jobs = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
-    ...open.map((p) => ({ finding: p, previous: p }))
+    // An earlier finding is re-checked only when its file is in the reviewed diff. Without
+    // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
+    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p }))
   ];
   const patchOf = (file) => diffs.find((d) => d.path === file)?.numbered ?? "(file not in the diff)";
   const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
@@ -16742,7 +16768,7 @@ ${d.numbered}`).join("\n\n")}`
       root: input2.root,
       system: VERIFY_SYSTEM,
       user: [
-        prev ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head." : "",
+        prev ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head: confirm if it is, reject only if the current code no longer has the problem." : "",
         `Finding:
 ${JSON.stringify(
           { file: finding.file, line: finding.line, end_line: finding.endLine, severity: finding.severity, title: finding.title, body: finding.body, evidence: finding.evidence },
@@ -16857,7 +16883,7 @@ async function main() {
     const model = input("model") ?? config.model.name;
     const verifyModel = input("verify_model") ?? config.model.verify;
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
-    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha)).filter((d) => !ignored(config, d.path));
+    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter((d) => !ignored(config, d.path));
     let size = 0;
     const diffs = reviewable.filter((d) => {
       if (size + d.numbered.length > MAX_DIFF_CHARS) return false;
@@ -16958,7 +16984,9 @@ ${summaryBody(state, prev, outside, run2)}`);
       }
     }
     for (const f of fixedNow) {
-      if (f.commentId) await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch(() => void 0);
+      if (!f.commentId) continue;
+      await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e) => log(`Reply on ${f.fp} failed: ${String(e)}`));
+      await new Promise((r) => setTimeout(r, 1500));
     }
     const body = summaryBody(state, prev, outside, run2);
     if (summaryId) await gh.editComment(summaryId, body);

@@ -273,7 +273,9 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
 
   const jobs: { finding: Finding; previous?: Tracked }[] = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
-    ...open.map((p) => ({ finding: p as Finding, previous: p })),
+    // An earlier finding is re-checked only when its file is in the reviewed diff. Without
+    // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
+    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p as Finding, previous: p })),
   ];
 
   const patchOf = (file: string) => diffs.find((d) => d.path === file)?.numbered ?? "(file not in the diff)";
@@ -283,7 +285,9 @@ export async function review(input: ReviewInput): Promise<{ checked: Checked[]; 
       root: input.root,
       system: VERIFY_SYSTEM,
       user: [
-        prev ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head." : "",
+        prev
+          ? "This finding was reported on an earlier commit. Check whether it is still present at the current PR head: confirm if it is, reject only if the current code no longer has the problem."
+          : "",
         `Finding:\n${JSON.stringify(
           { file: finding.file, line: finding.line, end_line: finding.endLine, severity: finding.severity, title: finding.title, body: finding.body, evidence: finding.evidence },
           null,

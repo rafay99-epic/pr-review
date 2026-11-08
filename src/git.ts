@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 const exec = promisify(execFile);
 
 const git = async (root: string, ...args: string[]) =>
-  (await exec("git", args, { cwd: root, maxBuffer: 64 * 1024 * 1024 })).stdout;
+  (await exec("git", args, { cwd: root, maxBuffer: 256 * 1024 * 1024 })).stdout;
 
 /**
  * Checks out the PR head detached and returns its merge base with the PR's base commit
@@ -22,8 +22,10 @@ export async function checkoutPr(root: string, pr: number, head: string, baseSha
   return (await git(root, "merge-base", baseSha, head)).trim();
 }
 
-export const diff = (root: string, from: string, to: string) =>
-  git(root, "diff", "--no-color", "--no-ext-diff", "-M", "--unified=5", from, to);
+/** The diff between two commits, with ignored globs excluded by git itself so huge lockfiles never load. */
+export const diff = (root: string, from: string, to: string, ignore: readonly string[]) =>
+  git(root, "-c", "core.quotePath=off", "diff", "--no-color", "--no-ext-diff", "-M", "--unified=5", from, to, "--", ".",
+    ...ignore.map((g) => `:(glob,exclude)${g}`));
 
 /** A file's content on a ref, or undefined if it does not exist there. */
 export const readAt = (root: string, ref: string, path: string) =>

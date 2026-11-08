@@ -82,7 +82,8 @@ export async function runTool(root: string, name: string, args: Record<string, u
     if (name === "read_file") {
       const full = await inside(root, str(args.path));
       if (!full) return "Error: no such file in the repository.";
-      const lines = (await readFile(full, "utf8")).split("\n");
+      const text = await readFile(full, "utf8");
+      const lines = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
       const start = Math.max(1, num(args.start_line, 1));
       const end = Math.min(lines.length, num(args.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1);
       const body = lines
@@ -96,6 +97,10 @@ export async function runTool(root: string, name: string, args: Record<string, u
       const pattern = str(args.pattern);
       if (!pattern) return "Error: empty pattern.";
       const scope = str(args.path);
+      // Plain repo-relative scopes only: no absolute paths, parent hops or pathspec magic.
+      if (scope && (scope.startsWith("/") || scope.startsWith(":") || scope.split("/").includes(".."))) {
+        return "Error: path must be repository-relative.";
+      }
       const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...(scope ? [scope] : [])];
       const { stdout } = await run("git", argv, { cwd: root, maxBuffer: 8 * 1024 * 1024 }).catch(
         (e: { code?: number; stdout?: string }) => (e.code === 1 ? { stdout: "" } : Promise.reject(e)),

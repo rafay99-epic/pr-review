@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, type FileDiff, parseDiff } from "./diff.ts";
-import { chunk } from "./review.ts";
+import { chunk, settle } from "./review.ts";
 import { fingerprint, readState, score, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
@@ -85,4 +85,18 @@ test("chunk packs files up to the size and keeps a large file on its own", () =>
   const file = (path: string, n: number): FileDiff => ({ path, status: "modified", commentable: new Set(), hunkOf: new Map(), numbered: "x".repeat(n) });
   const parts = chunk([file("a", 40), file("b", 40), file("big", 500), file("c", 10)], 100);
   assert.deepEqual(parts.map((p) => p.map((f) => f.path)), [["a", "b"], ["big"], ["c"]]);
+});
+
+test("settle moves the whole range when the verifier corrects the line", () => {
+  const finding = { file: "a.ts", line: 100, endLine: 105, severity: "major" as const, title: "t", body: "b", evidence: ["a.ts:100: x"] };
+  const verdict = { verdict: "confirmed" as const, reason: "r", evidence: [], severity: "minor" as const };
+  assert.deepEqual([settle(finding, { ...verdict, line: 30 }).line, settle(finding, { ...verdict, line: 30 }).endLine], [30, 30]);
+  assert.deepEqual([settle(finding, { ...verdict, line: 30, end_line: 34 }).line, settle(finding, { ...verdict, line: 30, end_line: 34 }).endLine], [30, 34]);
+  assert.deepEqual([settle(finding, verdict).line, settle(finding, verdict).endLine], [100, 105]);
+  assert.deepEqual(settle(finding, verdict).evidence, finding.evidence);
+});
+
+test("parseDiff takes the path from the +++ line, spaces included", () => {
+  const [f] = parseDiff("diff --git a/my file.ts b/my file.ts\nindex 1..2 100644\n--- a/my file.ts\n+++ b/my file.ts\n@@ -1 +1 @@\n-a\n+b\n");
+  assert.equal(f?.path, "my file.ts");
 });

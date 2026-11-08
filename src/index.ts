@@ -78,7 +78,7 @@ async function main() {
     const verifyModel = input("verify_model") ?? config.model.verify;
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
 
-    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha)).filter((d) => !ignored(config, d.path));
+    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter((d) => !ignored(config, d.path));
     // Fill the budget file by file; a file that does not fit is skipped, later ones still get in.
     let size = 0;
     const diffs = reviewable.filter((d) => {
@@ -193,8 +193,11 @@ async function main() {
         if (c) f.commentId = c.id;
       }
     }
+    // Paced: GitHub's secondary rate limit rejects bursts of new comments.
     for (const f of fixedNow) {
-      if (f.commentId) await gh.reply(number, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch(() => undefined);
+      if (!f.commentId) continue;
+      await gh.reply(number, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e: unknown) => log(`Reply on ${f.fp} failed: ${String(e)}`));
+      await new Promise((r) => setTimeout(r, 1500));
     }
     const body = summaryBody(state, prev, outside, run);
     if (summaryId) await gh.editComment(summaryId, body);

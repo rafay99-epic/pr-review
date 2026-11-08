@@ -6,12 +6,15 @@ import { findingTag, SUMMARY_TAG, writeState } from "./state.ts";
 const ORDER = { critical: 0, major: 1, minor: 2 } as const;
 export const bySeverity = <T extends Pick<Finding, "severity">>(a: T, b: T) => ORDER[a.severity] - ORDER[b.severity];
 
+/** Model text on one line, safe inside a table cell or list item. */
+const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+
 const fence = (lines: readonly string[]) => `\`\`\`text\n${lines.join("\n").replaceAll("```", "'''")}\n\`\`\``;
 
 export function inlineBody(f: Tracked): string {
   const tag = f.rule ? ` · rule \`${f.rule}\`` : "";
   return [
-    `**${f.title}** · ${f.severity}${tag}`,
+    `**${flat(f.title)}** · ${f.severity}${tag}`,
     "",
     f.body,
     "",
@@ -45,18 +48,18 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
 
   if (open.length) {
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
-    for (const f of open) lines.push(`| ${f.severity} | ${f.title.replaceAll("|", "\\|")} | ${link(f)} |`);
+    for (const f of open) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {
     lines.push("No verified issues.");
   }
 
   if (outside.length) {
     lines.push("", "**Outside the changed lines**", "");
-    for (const f of outside) lines.push(`- **${f.title}** (${link(f)}, ${f.severity}): ${f.body}`);
+    for (const f of outside) lines.push(`- **${flat(f.title)}** (${link(f)}, ${f.severity}): ${flat(f.body)}`);
   }
   if (fixed.length) {
     lines.push("", `<details><summary>Fixed since last review (${fixed.length})</summary>\n`);
-    for (const f of fixed) lines.push(`- ${f.title} (${f.file}:${f.line})`);
+    for (const f of fixed) lines.push(`- ${flat(f.title)} (${f.file}:${f.line})`);
     lines.push("\n</details>");
   }
   if (run.warning) lines.push("", `> ${run.warning}`);

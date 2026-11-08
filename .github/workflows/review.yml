@@ -27,8 +27,18 @@ jobs:
         && startsWith(github.event.comment.body, '/review'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Callers grant these; declaring them keeps the needs explicit and the token narrow.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    # One review per PR at a time: a /review during a push review waits instead of racing
+    # it to the summary comment. Skipped runs (other comments) never join the group.
+    concurrency:
+      group: reviewpilot-run-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
     env:
-      HAS_APP: ${{ secrets.REVIEWPILOT_APP_ID != '' }}
+      HAS_APP: ${{ secrets.REVIEWPILOT_APP_ID != '' && secrets.REVIEWPILOT_PRIVATE_KEY != '' }}
     steps:
       - id: app
         if: env.HAS_APP == 'true'

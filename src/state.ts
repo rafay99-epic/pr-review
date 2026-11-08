@@ -65,8 +65,18 @@ export function readState(body: string): State | undefined {
   }
 }
 
+/**
+ * Fixed and dismissed findings keep only what matching needs, and only the latest 100 of
+ * them, so the summary stays under GitHub's 65,536-character comment limit on long PRs.
+ */
 export function writeState(state: State): string {
-  return `<!-- reviewpilot:state ${Buffer.from(JSON.stringify(state)).toString("base64")} -->`;
+  const open = state.findings.filter((f) => f.status === "open");
+  const closed = state.findings
+    .filter((f) => f.status !== "open")
+    .slice(-100)
+    .map((f) => ({ ...f, body: "", evidence: [] }));
+  const json = JSON.stringify({ ...state, findings: [...open, ...closed] });
+  return `<!-- reviewpilot:state ${Buffer.from(json).toString("base64")} -->`;
 }
 
 export const SUMMARY_TAG = "<!-- reviewpilot:summary -->";

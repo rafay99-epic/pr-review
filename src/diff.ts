@@ -40,6 +40,9 @@ export function parseDiff(raw: string): FileDiff[] {
     else if (text.startsWith("rename to ")) {
       file.status = "renamed";
       file.path = text.slice("rename to ".length);
+    } else if (text.startsWith("+++ b/")) {
+      // The +++ line carries the new path verbatim, spaces included.
+      file.path = text.slice("+++ b/".length);
     } else if (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index ")) {
       continue;
     } else if (text.startsWith("@@")) {
