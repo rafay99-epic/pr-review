@@ -1,5 +1,5 @@
-# Copy to <repo>/.github/workflows/pr-agent.yml to turn on reviews for that repo.
-name: pr-agent
+# Copy to <repo>/.github/workflows/reviewpilot.yml to turn on ReviewPilot for that repo.
+name: reviewpilot
 
 on:
   pull_request:
@@ -12,14 +12,13 @@ permissions:
   issues: write
   pull-requests: write
 
-# Pushes to a PR cancel its stale review. Each comment gets its own group: PR-Agent's own
-# replies are comments too, and a shared group would let them cancel the /review they answer.
-concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || format('comment-{0}', github.event.comment.id) }}
-  cancel-in-progress: true
+# Runs are never cancelled mid-review: a cancel between posting comments and saving state
+# would make the next run post them again. The job-level group queues runs per PR instead.
 
 jobs:
   review:
-    uses: rafay99-epic/pr-review/.github/workflows/pr-agent.yml@main
+    uses: rafay99-epic/reviewpilot/.github/workflows/review.yml@main
     secrets:
-      CMD_API_KEY: ${{ secrets.CMD_API_KEY }}
+      REVIEWPILOT_API_KEY: ${{ secrets.CMD_API_KEY }}
+      REVIEWPILOT_APP_ID: ${{ secrets.REVIEWPILOT_APP_ID }}
+      REVIEWPILOT_PRIVATE_KEY: ${{ secrets.REVIEWPILOT_PRIVATE_KEY }}

@@ -1,4 +1,5 @@
-# Reviews this repo's own PRs with the shared workflow, so config changes get tested here first.
+# Reviews this repo's own PRs with the ReviewPilot code on the PR branch (`uses: ./`), so a
+# change to the reviewer is tested on itself before it reaches other repos.
 name: self-review
 
 on:
@@ -12,15 +13,55 @@ permissions:
   issues: write
   pull-requests: write
 
-# Pushes to a PR cancel its stale review. Each comment gets its own group: PR-Agent's own
-# replies are comments too, and a shared group would let them cancel the /review they answer.
-concurrency:
-  group: pr-agent-${{ github.event.pull_request.number || format('comment-{0}', github.event.comment.id) }}
-  cancel-in-progress: true
+# Runs are never cancelled mid-review: a cancel between posting comments and saving state
+# would make the next run post them again. The job-level group queues runs per PR instead.
 
 jobs:
   review:
-    # Local path, not @main: a PR that edits the shared workflow is reviewed by its own version.
-    uses: ./.github/workflows/pr-agent.yml
-    secrets:
-      CMD_API_KEY: ${{ secrets.CMD_API_KEY }}
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.user.login == github.repository_owner
+        && !github.event.pull_request.draft)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.issue.state == 'open'
+        && github.event.comment.user.login == github.repository_owner
+        && startsWith(github.event.comment.body, '/review'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # One review per PR at a time: a /review during a push review waits instead of racing
+    # it to the summary comment. Skipped runs (other comments) never join the group.
+    concurrency:
+      group: reviewpilot-run-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    env:
+      HAS_APP: ${{ secrets.REVIEWPILOT_APP_ID != '' && secrets.REVIEWPILOT_PRIVATE_KEY != '' }}
+    steps:
+      # A revoked key or a missing install must not stop reviews: fall back to github.token.
+      - id: app
+        if: env.HAS_APP == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.REVIEWPILOT_APP_ID }}
+          private-key: ${{ secrets.REVIEWPILOT_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Run the PR's own TypeScript, not whatever dist/ was committed, and fail if the
+      # committed bundle is stale (other repos run dist/ as committed).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          # pnpm comes from corepack in the next step, so setup-node cannot cache it yet.
+          package-manager-cache: false
+      - run: corepack enable && pnpm install --frozen-lockfile && pnpm test && pnpm typecheck && pnpm build
+      - run: git diff --exit-code -- dist || (echo "::error::dist/ is stale, run pnpm build and commit it" && exit 1)
+
+      - uses: ./
+        with:
+          api_key: ${{ secrets.CMD_API_KEY }}
+          github_token: ${{ steps.app.outputs.token || github.token }}
+          bot_login: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}

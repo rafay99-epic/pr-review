@@ -1,0 +1,61 @@
+# Reusable ReviewPilot workflow for my repos: owner-only gating, the ReviewPilot App token
+# (so comments come from reviewpilot[bot]), a full checkout, then the action. Repos call it
+# with caller.yml; without the App secrets it posts as github-actions[bot] instead.
+name: reviewpilot
+
+on:
+  workflow_call:
+    secrets:
+      REVIEWPILOT_API_KEY:
+        required: true
+      REVIEWPILOT_APP_ID:
+        required: false
+      REVIEWPILOT_PRIVATE_KEY:
+        required: false
+
+jobs:
+  review:
+    # PRs opened by the repo owner, and the owner's /review comments on open PRs.
+    if: >-
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.user.login == github.repository_owner
+        && !github.event.pull_request.draft
+        && !github.event.pull_request.head.repo.fork)
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.issue.state == 'open'
+        && github.event.comment.user.login == github.repository_owner
+        && startsWith(github.event.comment.body, '/review'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Callers grant these; declaring them keeps the needs explicit and the token narrow.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    # One review per PR at a time: a /review during a push review waits instead of racing
+    # it to the summary comment. Skipped runs (other comments) never join the group.
+    concurrency:
+      group: reviewpilot-run-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    env:
+      HAS_APP: ${{ secrets.REVIEWPILOT_APP_ID != '' && secrets.REVIEWPILOT_PRIVATE_KEY != '' }}
+    steps:
+      # A revoked key or a missing install must not stop reviews: fall back to github.token.
+      - id: app
+        if: env.HAS_APP == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.REVIEWPILOT_APP_ID }}
+          private-key: ${{ secrets.REVIEWPILOT_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: rafay99-epic/reviewpilot@main
+        with:
+          api_key: ${{ secrets.REVIEWPILOT_API_KEY }}
+          github_token: ${{ steps.app.outputs.token || github.token }}
+          bot_login: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}
