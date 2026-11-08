@@ -1,4 +1,4 @@
-# Reusable PR-Agent review: GLM-5.3 Flash at high effort (DeepSeek V4.1 Flash Fast fallback)
+# Reusable PR-Agent review: GLM-5.3 Flash at medium effort (DeepSeek V4.1 Flash Fast fallback)
 # through Command Code's OpenAI-compatible provider API. Repos opt in with the caller in
 # caller.yml; every model/tool setting lives here so one edit updates all repos.
 #
@@ -17,12 +17,13 @@ env:
   GITHUB_TOKEN: ${{ github.token }}
 
   # Model: Command Code provider API, billed against plan credits. The model itself is
-  # picked per step below. GLM-5.3 Flash is the reviewer; high effort trades a few minutes
-  # for findings (low effort plus a findings cap returned 1-2 comments per PR).
+  # picked per step below. Medium effort, measured 2026-11-08 on Lumo #182 (41k-token diff):
+  # 94s and 6 findings. High took 402s and returned 2: it thinks ~6x longer and prunes its
+  # own findings. A 7-min /review looks dead from the PR, so slash commands felt broken.
   OPENAI_KEY: ${{ secrets.CMD_API_KEY }}
   OPENAI.API_BASE: https://api.commandcode.ai/provider/v1
   config.fallback_models: "[]"
-  config.reasoning_effort: high  # GLM; the fallback step overrides it
+  config.reasoning_effort: medium
   config.additional_reasoning_effort_models: '["openai/deepseek/deepseek-v4.1-flash-fast", "openai/z-ai/glm-5.3-flash"]'
   config.custom_model_max_tokens: "128000"
   config.max_model_tokens: "128000"
@@ -62,29 +63,32 @@ env:
   pr_reviewer.num_max_findings: "20"
   pr_reviewer.require_tests_review: "false"
   pr_reviewer.require_estimate_effort_to_review: "false"
-  # PR-Agent's built-in prompt asks for "a concise list" and "prefer not reporting over
-  # guessing", which is why reviews came back with 1-2 findings. These instructions are
-  # rendered after it, so they say outright that they take priority.
+  # Coverage and precision, in that order of reading. PR-Agent is one model call over the
+  # diff: it cannot open other files, so every finding must be provable from what it sees.
+  # Findings get re-checked by a stronger model; a guessed one costs more than a missed one.
   pr_reviewer.extra_instructions: &focus >-
-    These instructions take priority over the default guidance above. This is not a concise
-    review: find every real defect this PR introduces and list each one separately, most
-    severe first. The default "prefer not reporting over guessing" and "only issues you are
-    confident about" rules do not apply here: if a problem is plausible and you can name the
-    trigger, report it and state what you assumed. An empty or short list is only acceptable
-    after you have checked every changed file. Go file by file and check:
-    logic bugs (wrong conditions, off-by-one, inverted checks, wrong variable, stale state);
-    unhandled edge cases (null or empty input, error paths, retries, races, timeouts,
-    concurrent updates, partial failure);
-    security (injection, XSS, SSRF, path traversal, missing auth or ownership checks,
-    secrets in code or logs, trusting client input);
-    what the change misses (callers or types not updated, validation not added, cleanup not
-    done, a migration or config left behind, a code path the new logic does not cover);
-    inconsistencies with how the same thing is done elsewhere in the diff or in the repo
-    context; type-safety holes (any, unchecked casts, non-null assertions);
-    and in UI code, accessibility plus missing loading, error, and empty states.
-    For each finding, name the concrete input or sequence that breaks and what goes wrong.
-    Skip formatting, naming taste, and generic advice such as "add tests" or
-    "consider logging".
+    Coverage: go through every changed file, not just the first few, and list every defect
+    you can prove, each as its own issue, most severe first. Check for logic bugs (wrong
+    conditions, off-by-one, inverted checks, wrong variable, stale state); unhandled edge
+    cases (null or empty input, error paths, races, partial failure); security (injection,
+    XSS, SSRF, path traversal, missing auth or ownership checks, secrets in code or logs,
+    trusting client input); what the change misses (a caller, type, validation, cleanup or
+    code path left behind inside the diff); inconsistencies with how the same thing is done
+    elsewhere in the diff or the repo context; type-safety holes; and in UI code,
+    accessibility plus missing loading, error, and empty states.
+    Precision, which outranks coverage: you only see the diff and a few lines around each
+    hunk. Never assume what code you cannot see does. Report an issue only if you can trace
+    the trigger from the input to the wrong result through code that is in front of you.
+    If the issue depends on a caller, a type, framework behaviour or state outside what is
+    shown, do not report it. Before you keep a finding, re-read the code for a guard, early
+    return, check or caller in the diff that already prevents it, and drop the finding if
+    one exists. A test in the diff that asserts a behaviour, or a code comment explaining a
+    choice, means it is intended: do not flag it unless the code contradicts it.
+    Write each finding with the exact lines that cause it, the input or sequence that
+    triggers it, and what goes wrong. No hedged or speculative findings ("might", "could
+    potentially", "if X is not handled elsewhere"). Skip formatting, naming taste, and
+    generic advice such as "add tests" or "consider logging". An empty list is fine when
+    nothing is provable.
   pr_code_suggestions.extra_instructions: *focus
 
 jobs:
@@ -112,11 +116,9 @@ jobs:
           config.model: openai/z-ai/glm-5.3-flash
           pr_reviewer.publish_review_failure_comment: "false"
 
-      # Fallback: DeepSeek V4.1 Flash Fast, only when GLM failed. Medium effort keeps it well
-      # inside its step limit (low answered in ~1 min). If this fails too, the job is red.
+      # Fallback: DeepSeek V4.1 Flash Fast, only when GLM failed. If this fails too, the job is red.
       - if: steps.primary.outcome == 'failure'
         uses: docker://pragent/pr-agent:0.49.0-github_action
         timeout-minutes: 9
         env:
           config.model: openai/deepseek/deepseek-v4.1-flash-fast
-          config.reasoning_effort: medium

@@ -13,7 +13,7 @@ branch=ci/pr-agent-review
 content=$(base64 < caller.yml | tr -d '\n')
 body='Adds PR-Agent review on PRs opened by the repo owner.
 
-The workflow calls the shared one in rafay99-epic/pr-review, which runs GLM-5.3 Flash through the Command Code provider API. A review for bugs, missed cases and security holes runs on open and on each push, as inline comments. Comment `/review`, `/improve` or `/ask <question>` to run on demand.
+The workflow calls the shared one in rafay99-epic/pr-review, which runs GLM-5.3 Flash through the Command Code provider API. A review for bugs, missed cases and security holes runs on open and on each push, as inline comments. Once this is merged, comment `/review`, `/improve` or `/ask <question>` to run on demand (comment commands only run from the default branch).
 
 This PR should get the first review.
 
