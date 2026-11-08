@@ -16088,7 +16088,8 @@ var FileConfig = type({
   "rules?": Rule.array(),
   "instructions?": "string",
   "context_files?": "string[]"
-});
+  // A typo like `min_severty` must be reported, not silently ignored.
+}).onDeepUndeclaredKey("reject");
 var DEFAULTS = {
   model: { name: "z-ai/glm-5.3-flash", verify: "z-ai/glm-5.3-flash", effort: "medium" },
   review: {
@@ -16319,7 +16320,7 @@ function createGitHub(token, repo) {
   async function all(schema2, path) {
     const page = schema2.array();
     const out = [];
-    for (let n = 1; n <= 10; n++) {
+    for (let n = 1; n <= 30; n++) {
       const batch = await call(page, "GET", `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${n}`);
       out.push(...batch);
       if (batch.length < 100) break;
@@ -16365,7 +16366,7 @@ function createGitHub(token, repo) {
     },
     async threads(n) {
       const query = `query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){pullRequest(number:$n){
-        reviewThreads(first:100){nodes{id isResolved resolvedBy{login} comments(first:30){nodes{id databaseId body authorAssociation author{login}}}}}}}}`;
+        reviewThreads(first:100){nodes{id isResolved resolvedBy{login} comments(first:100){nodes{id databaseId body authorAssociation author{login}}}}}}}}`;
       const res = await graphql(ThreadsData, query, { owner, name, n });
       return res.data.repository.pullRequest.reviewThreads.nodes.map((t) => ({
         id: t.id,
@@ -16443,13 +16444,20 @@ function createLlm(opts) {
         }
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
-      const parsed2 = Completion(await res.json().catch(() => void 0));
+      const text = await res.text();
+      let json3;
+      try {
+        json3 = JSON.parse(text);
+      } catch {
+        json3 = void 0;
+      }
+      const parsed2 = Completion(json3);
       const data = parsed2 instanceof type.errors ? void 0 : parsed2;
       if (!data && attempt < 4 && left() > 15e3) {
         await sleep2(2 ** attempt * 3e3);
         continue;
       }
-      if (!data) throw new Error(`${opts.model}: response is not a chat completion`);
+      if (!data) throw new Error(`${opts.model}: response is not a chat completion: ${text.slice(0, 200)}`);
       const message = data.choices?.[0]?.message;
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;
@@ -16467,7 +16475,7 @@ function createLlm(opts) {
 
 // src/log.ts
 import { appendFile } from "node:fs/promises";
-var seconds = (ms) => ms >= 6e4 ? `${Math.floor(ms / 6e4)}m ${Math.round(ms % 6e4 / 1e3)}s` : `${(ms / 1e3).toFixed(1)}s`;
+var seconds = (ms) => ms >= 6e4 ? `${Math.floor(ms / 6e4)}m ${Math.floor(ms % 6e4 / 1e3)}s` : `${(ms / 1e3).toFixed(1)}s`;
 function createLog(actions) {
   const phases = [];
   const safe = (text) => actions ? text.replace(/^::/gm, ": :") : text;
@@ -16590,6 +16598,7 @@ import { promisify as promisify2 } from "node:util";
 var run = promisify2(execFile2);
 var MAX_LINES = 250;
 var MAX_MATCHES = 150;
+var MAX_ENTRIES = 300;
 var MAX_BYTES = 2 * 1024 * 1024;
 var TOOL_SPECS = [
   {
@@ -16617,7 +16626,7 @@ var TOOL_SPECS = [
         type: "object",
         properties: {
           pattern: { type: "string", description: "Extended regular expression" },
-          path: { type: "string", description: "Optional directory or glob to limit the search, e.g. 'src' or '*.ts'" }
+          path: { type: "string", description: "Optional directory or glob to limit the search, e.g. 'src' or '**/*.ts'" }
         },
         required: ["pattern"]
       }
@@ -16669,7 +16678,8 @@ ${body}${more}`;
       if (scope2 && (scope2.startsWith("/") || scope2.startsWith(":") || scope2.split("/").includes(".."))) {
         return "Error: path must be repository-relative.";
       }
-      const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...scope2 ? [scope2] : []];
+      const pathspec = scope2.includes("*") ? `:(glob)${scope2}` : scope2;
+      const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...pathspec ? [pathspec] : []];
       const { stdout } = await run("git", argv, { cwd: root, maxBuffer: 8 * 1024 * 1024 }).catch(
         (e) => e.code === 1 ? { stdout: "" } : Promise.reject(e)
       );
@@ -16682,8 +16692,10 @@ ${body}${more}`;
     if (name === "list_dir") {
       const full = await inside(root, str(args2.path) || ".");
       if (!full || !(await stat(full)).isDirectory()) return "Error: not a directory in the repository.";
-      const entries = await readdir(full, { withFileTypes: true });
-      return entries.filter((e) => e.name !== ".git").map((e) => e.isDirectory() ? `${e.name}/` : e.name).sort().join("\n");
+      const entries = (await readdir(full, { withFileTypes: true })).filter((e) => e.name !== ".git").map((e) => e.isDirectory() ? `${e.name}/` : e.name).sort();
+      const more = entries.length > MAX_ENTRIES ? `
+[${entries.length - MAX_ENTRIES} more entries not shown]` : "";
+      return entries.slice(0, MAX_ENTRIES).join("\n") + more;
     }
     return `Error: unknown tool ${name}.`;
   } catch (e) {
@@ -16783,7 +16795,8 @@ function submitFindings(changed) {
     parse(args2, final) {
       const out = Findings(args2);
       if (out instanceof type.errors) return { ok: false, error: out.summary };
-      const missed = changed.filter((f) => !out.checked_files.includes(f));
+      const checked = new Set(out.checked_files.map((f) => f.replace(/^\.\//, "")));
+      const missed = changed.filter((f) => !checked.has(f));
       if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,

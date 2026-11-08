@@ -105,7 +105,7 @@ export function createGitHub(token: string, repo: string) {
   async function all<S extends type.Any>(schema: S, path: string): Promise<S["infer"][]> {
     const page = schema.array();
     const out: S["infer"][] = [];
-    for (let n = 1; n <= 10; n++) {
+    for (let n = 1; n <= 30; n++) {
       const batch = await call(page, "GET", `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${n}`);
       out.push(...batch);
       if (batch.length < 100) break;
@@ -158,7 +158,7 @@ export function createGitHub(token: string, repo: string) {
 
     async threads(n: number): Promise<Thread[]> {
       const query = `query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){pullRequest(number:$n){
-        reviewThreads(first:100){nodes{id isResolved resolvedBy{login} comments(first:30){nodes{id databaseId body authorAssociation author{login}}}}}}}}`;
+        reviewThreads(first:100){nodes{id isResolved resolvedBy{login} comments(first:100){nodes{id databaseId body authorAssociation author{login}}}}}}}}`;
       const res = await graphql(ThreadsData, query, { owner, name, n });
       return res.data.repository.pullRequest.reviewThreads.nodes.map((t) => ({
         id: t.id,

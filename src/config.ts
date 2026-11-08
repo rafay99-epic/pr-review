@@ -29,7 +29,8 @@ const FileConfig = type({
   "rules?": Rule.array(),
   "instructions?": "string",
   "context_files?": "string[]",
-});
+  // A typo like `min_severty` must be reported, not silently ignored.
+}).onDeepUndeclaredKey("reject");
 
 export type Rule = typeof Rule.infer;
 

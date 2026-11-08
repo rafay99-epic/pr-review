@@ -90,13 +90,20 @@ export function createLlm(opts: {
       }
 
       // A 200 with a body that is not a completion (proxy error page, truncation) is retried.
-      const parsed = Completion(await res.json().catch(() => undefined));
+      const text = await res.text();
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = undefined;
+      }
+      const parsed = Completion(json);
       const data = parsed instanceof type.errors ? undefined : parsed;
       if (!data && attempt < 4 && left() > 15_000) {
         await sleep(2 ** attempt * 3000);
         continue;
       }
-      if (!data) throw new Error(`${opts.model}: response is not a chat completion`);
+      if (!data) throw new Error(`${opts.model}: response is not a chat completion: ${text.slice(0, 200)}`);
       const message = data.choices?.[0]?.message;
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;

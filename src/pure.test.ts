@@ -142,3 +142,9 @@ test("unquote undoes git's C-style path quoting", () => {
   const [f] = parseDiff('diff --git "a/q\\"x.ts" "b/q\\"x.ts"\n--- "a/q\\"x.ts"\n+++ "b/q\\"x.ts"\n@@ -1 +1 @@\n-a\n+b\n');
   assert.equal(f?.path, 'q"x.ts');
 });
+
+test("config rejects unknown keys so typos are reported", () => {
+  const { config, warning } = loadConfig("review:\n  min_severty: major\n");
+  assert.deepEqual(config, DEFAULTS);
+  assert.match(warning ?? "", /min_severty/);
+});

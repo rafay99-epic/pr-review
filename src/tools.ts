@@ -12,6 +12,7 @@ const run = promisify(execFile);
 
 const MAX_LINES = 250;
 const MAX_MATCHES = 150;
+const MAX_ENTRIES = 300;
 const MAX_BYTES = 2 * 1024 * 1024;
 
 export const TOOL_SPECS: ToolSpec[] = [
@@ -42,7 +43,7 @@ export const TOOL_SPECS: ToolSpec[] = [
         type: "object",
         properties: {
           pattern: { type: "string", description: "Extended regular expression" },
-          path: { type: "string", description: "Optional directory or glob to limit the search, e.g. 'src' or '*.ts'" },
+          path: { type: "string", description: "Optional directory or glob to limit the search, e.g. 'src' or '**/*.ts'" },
         },
         required: ["pattern"],
       },
@@ -105,7 +106,9 @@ export async function runTool(root: string, name: string, args: Record<string, u
       if (scope && (scope.startsWith("/") || scope.startsWith(":") || scope.split("/").includes(".."))) {
         return "Error: path must be repository-relative.";
       }
-      const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...(scope ? [scope] : [])];
+      // A scope with wildcards is a glob ('**/*.ts'); plain git pathspecs do not cross directories.
+      const pathspec = scope.includes("*") ? `:(glob)${scope}` : scope;
+      const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...(pathspec ? [pathspec] : [])];
       const { stdout } = await run("git", argv, { cwd: root, maxBuffer: 8 * 1024 * 1024 }).catch(
         (e: { code?: number; stdout?: string }) => (e.code === 1 ? { stdout: "" } : Promise.reject(e)),
       );
@@ -117,12 +120,12 @@ export async function runTool(root: string, name: string, args: Record<string, u
     if (name === "list_dir") {
       const full = await inside(root, str(args.path) || ".");
       if (!full || !(await stat(full)).isDirectory()) return "Error: not a directory in the repository.";
-      const entries = await readdir(full, { withFileTypes: true });
-      return entries
+      const entries = (await readdir(full, { withFileTypes: true }))
         .filter((e) => e.name !== ".git")
         .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-        .sort()
-        .join("\n");
+        .sort();
+      const more = entries.length > MAX_ENTRIES ? `\n[${entries.length - MAX_ENTRIES} more entries not shown]` : "";
+      return entries.slice(0, MAX_ENTRIES).join("\n") + more;
     }
     return `Error: unknown tool ${name}.`;
   } catch (e) {

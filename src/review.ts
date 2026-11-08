@@ -56,7 +56,8 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
       const out = Findings(args);
       if (out instanceof type.errors) return { ok: false, error: out.summary };
       // Coverage is enforced until the budget runs out; then a partial review beats none.
-      const missed = changed.filter((f) => !out.checked_files.includes(f));
+      const checked = new Set(out.checked_files.map((f) => f.replace(/^\.\//, "")));
+      const missed = changed.filter((f) => !checked.has(f));
       if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,

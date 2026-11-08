@@ -6,7 +6,7 @@ import { appendFile } from "node:fs/promises";
 
 export type Usage = { calls: number; prompt: number; completion: number };
 
-const seconds = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
+const seconds = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
 
 export function createLog(actions: boolean) {
   const phases: { name: string; ms: number }[] = [];
