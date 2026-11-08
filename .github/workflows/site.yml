@@ -1,0 +1,36 @@
+# Builds the website on every change to it and keeps the output as an artifact, so a PR
+# shows whether the site builds before Vercel deploys it (Vercel's Git integration does
+# the deploy itself; this job needs no Vercel secrets).
+name: site
+
+on:
+  pull_request:
+    paths: ["apps/web/**", "pnpm-lock.yaml", "turbo.json", ".github/workflows/site.yml"]
+  push:
+    branches: [main]
+    paths: ["apps/web/**", "pnpm-lock.yaml", "turbo.json", ".github/workflows/site.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: corepack enable && pnpm install --frozen-lockfile
+      - run: pnpm turbo run typecheck build --filter=@reviewpilot/web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: apps/web/dist
+          retention-days: 7
