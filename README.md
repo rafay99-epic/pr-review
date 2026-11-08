@@ -1,6 +1,6 @@
 # pr-review
 
-PR-Agent reviews on my PRs, running DeepSeek V4.1 Flash Fast (GLM-5.3 Flash fallback) through Command Code's provider API.
+PR-Agent reviews on my PRs, running GLM-5.3 Flash at high effort (DeepSeek V4.1 Flash Fast fallback) through Command Code's provider API.
 
 All settings are in `.github/workflows/pr-agent.yml`. Each repo only carries `caller.yml`.
 
@@ -11,7 +11,7 @@ gh secret set CMD_API_KEY -R rafay99-epic/<repo>        # key from commandcode.a
 cp caller.yml ~/code/<repo>/.github/workflows/pr-agent.yml
 ```
 
-Only `/review` runs automatically: findings land as inline comments on the changed lines, plus one summary comment, re-run on each push without re-posting old findings. Comment `/improve` for one-click committable fixes.
+Only `/review` runs automatically: a thorough pass for bugs, missed cases, security holes and inconsistencies, up to 20 findings, each an inline comment on its line plus one summary comment. It re-runs on each push without re-posting old findings. Comment `/improve` for one-click committable fixes.
 
 ## Commands (comment on the PR)
 
@@ -22,6 +22,6 @@ Only `/review` runs automatically: findings land as inline comments on the chang
 
 Only PRs opened by the repo owner, and owner comments starting with `/`, trigger a run.
 
-## Cost
+## Cost and time
 
-DeepSeek V4.1 Flash Fast is $0.16 in / $0.58 out per 1M tokens off-peak ($0.32 / $1.16 peak). A typical review costs about $0.01-0.02 and takes about 1-2 minutes.
+Billed against Command Code plan credits. GLM-5.3 Flash at high effort takes a few minutes per review; the step is killed at 10 min and DeepSeek takes over.
