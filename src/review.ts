@@ -176,12 +176,10 @@ function repoSection(config: Config, rules: readonly Rule[], guidance: string): 
 
 const pool = async <T, R>(items: readonly T[], size: number, fn: (item: T, index: number) => Promise<R>) => {
   const results: R[] = new Array(items.length);
-  let next = 0;
+  const queue = items.entries();
+  // Workers share one iterator, so each item is taken exactly once.
   const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i] as T, i);
-    }
+    for (const [i, item] of queue) results[i] = await fn(item, i);
   };
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
   return results;
@@ -280,7 +278,7 @@ export async function review(
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
     // An earlier finding is re-checked only when its file is in the reviewed diff. Without
     // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
-    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p as Finding, previous: p })),
+    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p })),
   ];
 
   const patchOf = (file: string) => diffs.find((d) => d.path === file)?.numbered ?? "(file not in the diff)";
@@ -362,7 +360,7 @@ export async function dedupe(
     maxTurns: 2,
     deadline: Date.now() + 60_000,
     log: () => {},
-  }).catch(() => [] as string[][]);
+  }).catch((): string[][] => []);
   // Indices below known.length are tracked findings. In each group keep the first entry
   // (a tracked one if present, else the most severe new one) and drop the rest.
   const drop = new Set<number>();

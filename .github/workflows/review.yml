@@ -57,3 +57,4 @@ jobs:
         with:
           api_key: ${{ secrets.REVIEWPILOT_API_KEY }}
           github_token: ${{ steps.app.outputs.token || github.token }}
+          bot_login: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}

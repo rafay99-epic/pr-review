@@ -3,6 +3,7 @@
 // findings inline and refresh the single summary comment with the score and the delta.
 
 import { appendFile, readFile } from "node:fs/promises";
+import { type } from "arktype";
 import { ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, parseDiff } from "./diff.ts";
 import { checkoutPr, diff, fetchRef, readAt } from "./git.ts";
@@ -29,11 +30,12 @@ const GUIDANCE_CHARS = 12_000;
 const input = (name: string) => process.env[`INPUT_${name.toUpperCase()}`]?.trim() || undefined;
 const log = (line: string) => console.log(line);
 
-type Event = {
-  pull_request?: { number: number };
-  issue?: { number: number; pull_request?: unknown };
-  comment?: { id: number; body: string };
-};
+/** The parts of the workflow event payload ReviewPilot reads; everything else is ignored. */
+const Event = type({
+  "pull_request?": { number: "number" },
+  "issue?": { number: "number", "pull_request?": "unknown" },
+  "comment?": { id: "number", body: "string" },
+});
 
 async function main() {
   const started = Date.now();
@@ -41,12 +43,14 @@ async function main() {
   const root = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const dryRun = process.env.REVIEWPILOT_DRY_RUN === "1";
   const token = input("github_token") ?? process.env.GITHUB_TOKEN ?? "";
+  // Only comments from these accounts are trusted as ReviewPilot's own: anyone can paste
+  // the hidden markers into a comment, but only this repo's workflows post as these.
+  const trusted = new Set([input("bot_login") ?? "github-actions[bot]", "github-actions[bot]"]);
+  const ours = (login: string | undefined) => login !== undefined && trusted.has(login);
   const apiKey = input("api_key") ?? process.env.REVIEWPILOT_API_KEY ?? "";
   if (!repo || !token || !apiKey) throw new Error("Needs GITHUB_REPOSITORY, a GitHub token and api_key.");
 
-  const event: Event = process.env.GITHUB_EVENT_PATH
-    ? (JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8")) as Event)
-    : {};
+  const event = Event.assert(process.env.GITHUB_EVENT_PATH ? JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8")) : {});
   const comment = event.comment;
   if (comment && !/^\/review\b/.test(comment.body.trim())) return log("Comment is not /review, nothing to do.");
   if (comment && !event.issue?.pull_request) return log("Comment is not on a pull request, nothing to do.");
@@ -61,7 +65,7 @@ async function main() {
   if (comment && !dryRun) await gh.react(comment.id, "eyes").catch(() => undefined);
 
   // Show progress right away in the summary comment, keeping the previous state in it.
-  const existing = (await gh.issueComments(number)).find((c) => c.body.includes(SUMMARY_TAG));
+  const existing = (await gh.issueComments(number)).find((c) => c.body.includes(SUMMARY_TAG) && ours(c.user?.login));
   const prev = existing ? readState(existing.body) : undefined;
   let summaryId = existing?.id;
   if (!dryRun) {
@@ -103,8 +107,10 @@ async function main() {
     // Earlier findings: a thread the author resolved or replied to counts as dismissed.
     const previous: Tracked[] = (prev?.findings ?? []).map((f) => ({ ...f }));
     const threads = await gh.threads(number).catch(() => []);
+    const fpOf = (t: (typeof threads)[number]) =>
+      ours(t.comments[0]?.author) ? t.comments[0]?.body.match(FINDING_TAG)?.[1] : undefined;
     for (const t of threads) {
-      const fp = t.comments[0]?.body.match(FINDING_TAG)?.[1];
+      const fp = fpOf(t);
       const tracked = previous.find((p) => p.fp === fp && p.status === "open");
       const replied = t.comments.slice(1).some((c) => c.author !== "" && !c.author.endsWith("[bot]"));
       if (tracked && (t.resolved || replied)) tracked.status = "dismissed";
@@ -211,7 +217,7 @@ async function main() {
       }
       const posted = await gh.reviewComments(number);
       for (const f of fresh) {
-        const c = posted.find((p) => p.body.match(FINDING_TAG)?.[1] === f.fp && !p.in_reply_to_id);
+        const c = posted.find((p) => ours(p.user?.login) && p.body.match(FINDING_TAG)?.[1] === f.fp && !p.in_reply_to_id);
         if (c) f.commentId = c.id;
       }
     }
@@ -220,7 +226,8 @@ async function main() {
     const body = summaryBody(state, prev, outside, run);
     // Inline comments are already up, so the new state must land: retry once, and never
     // fall back to the old state (that would make the next run post them again).
-    if (summaryId) await gh.editComment(summaryId, body).catch(() => gh.editComment(summaryId as number, body)).catch((e: unknown) => {
+    const target = summaryId;
+    if (target) await gh.editComment(target, body).catch(() => gh.editComment(target, body)).catch((e: unknown) => {
       if (inlinePosted) throw Object.assign(new Error(`summary not saved: ${String(e)}`), { keepSummary: true });
       throw e;
     });
@@ -230,6 +237,9 @@ async function main() {
     for (const f of fixedNow) {
       if (!f.commentId) continue;
       await gh.reply(number, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e: unknown) => log(`Reply on ${f.fp} failed: ${String(e)}`));
+      // Then close it: resolve the thread and collapse the comment as outdated.
+      const thread = threads.find((t) => fpOf(t) === f.fp && !t.resolved);
+      if (thread) await gh.close(thread).catch((e: unknown) => log(`Closing ${f.fp} failed: ${String(e)}`));
       await new Promise((r) => setTimeout(r, 1500));
     }
   } catch (e) {

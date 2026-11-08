@@ -7364,9 +7364,6 @@ var require_dist = __commonJS({
 // src/index.ts
 import { appendFile, readFile as readFile2 } from "node:fs/promises";
 
-// src/config.ts
-import { matchesGlob } from "node:path";
-
 // node_modules/.pnpm/@ark+util@0.56.8/node_modules/@ark/util/out/arrays.js
 var liftArray = (data) => Array.isArray(data) ? data : [data];
 var spliterate = (arr, predicate) => {
@@ -15986,11 +15983,30 @@ var define = ark.define;
 var declare = ark.declare;
 
 // src/config.ts
+import { matchesGlob } from "node:path";
 var import_yaml = __toESM(require_dist(), 1);
 
 // src/state.ts
 import { createHash } from "node:crypto";
 var SEVERITIES = ["critical", "major", "minor"];
+var FindingSchema = type({
+  file: "string",
+  line: "number.integer",
+  endLine: "number.integer",
+  severity: type.enumerated(...SEVERITIES),
+  title: "string",
+  body: "string",
+  /** Exact lines that prove the finding, as `file:line` with the code. */
+  evidence: "string[]",
+  "rule?": "string"
+});
+var TrackedSchema = FindingSchema.and({
+  fp: "string",
+  status: "'open' | 'fixed' | 'dismissed'",
+  /** Review comment id of the inline comment, once posted. */
+  "commentId?": "number"
+});
+var StateSchema = type({ head: "string", score: "1 | 2 | 3 | 4 | 5", findings: TrackedSchema.array() });
 function score(findings) {
   const critical = findings.filter((f) => f.severity === "critical").length;
   if (critical >= 2) return 1;
@@ -16011,7 +16027,8 @@ function readState(body) {
   const json3 = body.match(MARKER)?.[1];
   if (!json3) return void 0;
   try {
-    return JSON.parse(Buffer.from(json3, "base64").toString("utf8"));
+    const out = StateSchema(JSON.parse(Buffer.from(json3, "base64").toString("utf8")));
+    return out instanceof type.errors ? void 0 : out;
   } catch {
     return void 0;
   }
@@ -16198,9 +16215,39 @@ async function fetchRef(root, branch) {
 }
 
 // src/github.ts
+var Pr = type({
+  number: "number",
+  state: "string",
+  draft: "boolean",
+  title: "string",
+  body: "string | null",
+  head: { sha: "string" },
+  base: { ref: "string", sha: "string", repo: { default_branch: "string" } }
+});
+var User = type({ login: "string" });
+var IssueComment = type({ id: "number", body: "string", user: User.or("null") });
+var ReviewComment = type({ id: "number", body: "string", "in_reply_to_id?": "number", user: User.or("null") });
+var Created = type({ id: "number" });
+var ThreadsData = type({
+  data: {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          nodes: type({
+            id: "string",
+            isResolved: "boolean",
+            comments: {
+              nodes: type({ id: "string", databaseId: "number | null", body: "string", author: User.or("null") }).array()
+            }
+          }).array()
+        }
+      }
+    }
+  }
+});
 function createGitHub(token, repo) {
   const api = process.env.GITHUB_API_URL ?? "https://api.github.com";
-  async function call(method, path, body) {
+  async function call(schema2, method, path, body) {
     const res = await fetch(`${api}${path}`, {
       method,
       headers: {
@@ -16213,28 +16260,35 @@ function createGitHub(token, repo) {
       ...body ? { body: JSON.stringify(body) } : {}
     });
     if (!res.ok) throw new Error(`GitHub ${method} ${path}: ${res.status} ${(await res.text()).slice(0, 300)}`);
-    return res.status === 204 ? void 0 : await res.json();
+    try {
+      return schema2.assert(res.status === 204 ? void 0 : await res.json());
+    } catch (e) {
+      throw new Error(`GitHub ${method} ${path}: unexpected response, ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
-  async function all(path) {
+  async function all(schema2, path) {
+    const page = schema2.array();
     const out = [];
-    for (let page = 1; page <= 10; page++) {
-      const batch = await call("GET", `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${page}`);
+    for (let n = 1; n <= 10; n++) {
+      const batch = await call(page, "GET", `${path}${path.includes("?") ? "&" : "?"}per_page=100&page=${n}`);
       out.push(...batch);
       if (batch.length < 100) break;
     }
     return out;
   }
+  const graphql = (schema2, query, variables) => call(schema2, "POST", "/graphql", { query, variables });
   const [owner, name] = repo.split("/");
   const r = `/repos/${repo}`;
+  const ignore = type("unknown");
   return {
-    pr: (n) => call("GET", `${r}/pulls/${n}`),
-    issueComments: (n) => all(`${r}/issues/${n}/comments`),
-    reviewComments: (n) => all(`${r}/pulls/${n}/comments`),
-    comment: (n, body) => call("POST", `${r}/issues/${n}/comments`, { body }),
-    editComment: (id, body) => call("PATCH", `${r}/issues/comments/${id}`, { body }),
-    react: (commentId, content) => call("POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
-    reply: (n, commentId, body) => call("POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
-    review: (n, commitId, comments) => call("POST", `${r}/pulls/${n}/reviews`, {
+    pr: (n) => call(Pr, "GET", `${r}/pulls/${n}`),
+    issueComments: (n) => all(IssueComment, `${r}/issues/${n}/comments`),
+    reviewComments: (n) => all(ReviewComment, `${r}/pulls/${n}/comments`),
+    comment: (n, body) => call(Created, "POST", `${r}/issues/${n}/comments`, { body }),
+    editComment: (id, body) => call(Created, "PATCH", `${r}/issues/comments/${id}`, { body }),
+    react: (commentId, content) => call(ignore, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
+    reply: (n, commentId, body) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
+    review: (n, commitId, comments) => call(Created, "POST", `${r}/pulls/${n}/reviews`, {
       commit_id: commitId,
       event: "COMMENT",
       comments: comments.map((c) => ({
@@ -16245,20 +16299,38 @@ function createGitHub(token, repo) {
         body: c.body
       }))
     }),
-    /** Review threads with their resolved state, which only GraphQL exposes. */
     async threads(n) {
       const query = `query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){pullRequest(number:$n){
-        reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body author{login}}}}}}}}`;
-      const res = await call("POST", "/graphql", { query, variables: { owner, name, n } });
-      return (res.data?.repository?.pullRequest?.reviewThreads?.nodes ?? []).map((t) => ({
+        reviewThreads(first:100){nodes{id isResolved comments(first:20){nodes{id databaseId body author{login}}}}}}}}`;
+      const res = await graphql(ThreadsData, query, { owner, name, n });
+      return res.data.repository.pullRequest.reviewThreads.nodes.map((t) => ({
+        id: t.id,
         resolved: t.isResolved,
-        comments: t.comments.nodes.map((c) => ({ body: c.body, author: c.author?.login ?? "" }))
+        comments: t.comments.nodes.map((c) => ({ id: c.id, databaseId: c.databaseId, body: c.body, author: c.author?.login ?? "" }))
       }));
+    },
+    /** Closes a fixed finding: resolves its thread and collapses the comment as outdated. */
+    async close(thread) {
+      const root = thread.comments[0];
+      await graphql(ignore, "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: thread.id });
+      if (root) {
+        await graphql(ignore, "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}", { id: root.id });
+      }
     }
   };
 }
 
 // src/llm.ts
+var Completion = type({
+  "choices?": type({
+    "message?": {
+      "content?": "string | null",
+      "tool_calls?": type({ id: "string", type: "'function'", function: { name: "string", arguments: "string" } }).array()
+    }
+  }).array(),
+  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number" },
+  "error?": { "message?": "string" }
+});
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function createLlm(opts) {
   const usage = { prompt: 0, completion: 0, calls: 0 };
@@ -16293,12 +16365,13 @@ function createLlm(opts) {
         const detail = "text" in res ? await res.text() : String(res.error);
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
-      const data = await res.json().catch(() => void 0);
+      const parsed2 = Completion(await res.json().catch(() => void 0));
+      const data = parsed2 instanceof type.errors ? void 0 : parsed2;
       if (!data && attempt < 4) {
         await sleep(2 ** attempt * 3e3);
         continue;
       }
-      if (!data) throw new Error(`${opts.model}: response body is not JSON`);
+      if (!data) throw new Error(`${opts.model}: response is not a chat completion`);
       const message = data.choices?.[0]?.message;
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;
@@ -16490,6 +16563,7 @@ ${body}${more}`;
 }
 
 // src/agent.ts
+var ToolArgs = type("Record<string, unknown>");
 async function runAgent(opts) {
   const { llm, submit } = opts;
   const name = submit.spec.function.name;
@@ -16532,7 +16606,11 @@ async function runAgent(opts) {
         opts.log(`${name} after ${turn} turns`);
         return parsed2.value;
       }
-      const record = args2 ?? {};
+      const record = ToolArgs(args2 ?? {});
+      if (record instanceof type.errors) {
+        messages.push({ role: "tool", tool_call_id: call.id, content: "Error: arguments must be a JSON object." });
+        continue;
+      }
       opts.log(`  ${call.function.name} ${JSON.stringify(record).slice(0, 120)}`);
       messages.push({ role: "tool", tool_call_id: call.id, content: await runTool(opts.root, call.function.name, record) });
     }
@@ -16696,12 +16774,9 @@ ${parts.join("\n\n")}` : "";
 }
 var pool = async (items, size, fn2) => {
   const results = new Array(items.length);
-  let next2 = 0;
+  const queue = items.entries();
   const worker = async () => {
-    while (next2 < items.length) {
-      const i = next2++;
-      results[i] = await fn2(items[i], i);
-    }
+    for (const [i, item] of queue) results[i] = await fn2(item, i);
   };
   await Promise.all(Array.from({ length: Math.min(size, items.length) }, worker));
   return results;
@@ -16864,15 +16939,22 @@ var MAX_DIFF_CHARS = 4e5;
 var GUIDANCE_CHARS = 12e3;
 var input = (name) => process.env[`INPUT_${name.toUpperCase()}`]?.trim() || void 0;
 var log = (line) => console.log(line);
+var Event = type({
+  "pull_request?": { number: "number" },
+  "issue?": { number: "number", "pull_request?": "unknown" },
+  "comment?": { id: "number", body: "string" }
+});
 async function main() {
   const started = Date.now();
   const repo = process.env.GITHUB_REPOSITORY ?? "";
   const root = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const dryRun = process.env.REVIEWPILOT_DRY_RUN === "1";
   const token = input("github_token") ?? process.env.GITHUB_TOKEN ?? "";
+  const trusted = /* @__PURE__ */ new Set([input("bot_login") ?? "github-actions[bot]", "github-actions[bot]"]);
+  const ours = (login) => login !== void 0 && trusted.has(login);
   const apiKey = input("api_key") ?? process.env.REVIEWPILOT_API_KEY ?? "";
   if (!repo || !token || !apiKey) throw new Error("Needs GITHUB_REPOSITORY, a GitHub token and api_key.");
-  const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(await readFile2(process.env.GITHUB_EVENT_PATH, "utf8")) : {};
+  const event = Event.assert(process.env.GITHUB_EVENT_PATH ? JSON.parse(await readFile2(process.env.GITHUB_EVENT_PATH, "utf8")) : {});
   const comment = event.comment;
   if (comment && !/^\/review\b/.test(comment.body.trim())) return log("Comment is not /review, nothing to do.");
   if (comment && !event.issue?.pull_request) return log("Comment is not on a pull request, nothing to do.");
@@ -16883,7 +16965,7 @@ async function main() {
   if (pr.state !== "open" && !process.env.REVIEWPILOT_PR) return log(`PR #${number2} is ${pr.state}, skipping.`);
   if (!comment && pr.draft) return log(`PR #${number2} is a draft, skipping.`);
   if (comment && !dryRun) await gh.react(comment.id, "eyes").catch(() => void 0);
-  const existing = (await gh.issueComments(number2)).find((c) => c.body.includes(SUMMARY_TAG));
+  const existing = (await gh.issueComments(number2)).find((c) => c.body.includes(SUMMARY_TAG) && ours(c.user?.login));
   const prev = existing ? readState(existing.body) : void 0;
   let summaryId = existing?.id;
   if (!dryRun) {
@@ -16893,8 +16975,8 @@ async function main() {
   }
   try {
     const mergeBase = await checkoutPr(root, number2, pr.head.sha, pr.base.sha);
-    const trusted = await fetchRef(root, pr.base.repo.default_branch);
-    const { config, warning } = loadConfig(await readAt(root, trusted, ".reviewpilot.yml"));
+    const trusted2 = await fetchRef(root, pr.base.repo.default_branch);
+    const { config, warning } = loadConfig(await readAt(root, trusted2, ".reviewpilot.yml"));
     if (warning) log(warning);
     const model = input("model") ?? config.model.name;
     const verifyModel = input("verify_model") ?? config.model.verify;
@@ -16908,14 +16990,15 @@ async function main() {
     });
     const skipped = reviewable.length - diffs.length;
     const guidance = (await Promise.all(config.context_files.map(async (f) => {
-      const text = await readAt(root, trusted, f);
+      const text = await readAt(root, trusted2, f);
       return text ? `--- ${f} ---
 ${text}` : "";
     }))).join("\n").slice(0, GUIDANCE_CHARS);
     const previous = (prev?.findings ?? []).map((f) => ({ ...f }));
     const threads = await gh.threads(number2).catch(() => []);
+    const fpOf = (t) => ours(t.comments[0]?.author) ? t.comments[0]?.body.match(FINDING_TAG)?.[1] : void 0;
     for (const t of threads) {
-      const fp = t.comments[0]?.body.match(FINDING_TAG)?.[1];
+      const fp = fpOf(t);
       const tracked = previous.find((p) => p.fp === fp && p.status === "open");
       const replied = t.comments.slice(1).some((c) => c.author !== "" && !c.author.endsWith("[bot]"));
       if (tracked && (t.resolved || replied)) tracked.status = "dismissed";
@@ -17010,12 +17093,13 @@ ${summaryBody(state, prev, outside, run2)}`);
       }
       const posted = await gh.reviewComments(number2);
       for (const f of fresh) {
-        const c = posted.find((p) => p.body.match(FINDING_TAG)?.[1] === f.fp && !p.in_reply_to_id);
+        const c = posted.find((p) => ours(p.user?.login) && p.body.match(FINDING_TAG)?.[1] === f.fp && !p.in_reply_to_id);
         if (c) f.commentId = c.id;
       }
     }
     const body = summaryBody(state, prev, outside, run2);
-    if (summaryId) await gh.editComment(summaryId, body).catch(() => gh.editComment(summaryId, body)).catch((e) => {
+    const target = summaryId;
+    if (target) await gh.editComment(target, body).catch(() => gh.editComment(target, body)).catch((e) => {
       if (inlinePosted) throw Object.assign(new Error(`summary not saved: ${String(e)}`), { keepSummary: true });
       throw e;
     });
@@ -17025,6 +17109,8 @@ ${summaryBody(state, prev, outside, run2)}`);
     for (const f of fixedNow) {
       if (!f.commentId) continue;
       await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e) => log(`Reply on ${f.fp} failed: ${String(e)}`));
+      const thread = threads.find((t) => fpOf(t) === f.fp && !t.resolved);
+      if (thread) await gh.close(thread).catch((e) => log(`Closing ${f.fp} failed: ${String(e)}`));
       await new Promise((r) => setTimeout(r, 1500));
     }
   } catch (e) {

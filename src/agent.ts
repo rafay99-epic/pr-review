@@ -2,8 +2,11 @@
 // arguments are validated. Invalid submissions go back to the model with the error, so a
 // malformed answer gets one more try instead of failing the review.
 
+import { type } from "arktype";
 import type { Llm, Message, ToolSpec } from "./llm.ts";
 import { runTool, TOOL_SPECS } from "./tools.ts";
+
+const ToolArgs = type("Record<string, unknown>");
 
 export type Submit<T> = {
   spec: ToolSpec;
@@ -66,7 +69,11 @@ export async function runAgent<T>(opts: {
         opts.log(`${name} after ${turn} turns`);
         return parsed.value;
       }
-      const record = (args ?? {}) as Record<string, unknown>;
+      const record = ToolArgs(args ?? {});
+      if (record instanceof type.errors) {
+        messages.push({ role: "tool", tool_call_id: call.id, content: "Error: arguments must be a JSON object." });
+        continue;
+      }
       opts.log(`  ${call.function.name} ${JSON.stringify(record).slice(0, 120)}`);
       messages.push({ role: "tool", tool_call_id: call.id, content: await runTool(opts.root, call.function.name, record) });
     }

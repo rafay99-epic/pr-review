@@ -1,6 +1,8 @@
 // Minimal client for any OpenAI-compatible chat completions API (Command Code, OpenRouter,
 // OpenCode Zen, a local server). Bring your own key and base URL.
 
+import { type } from "arktype";
+
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
 
 export type Message =
@@ -20,11 +22,16 @@ export type Llm = {
   usage: { prompt: number; completion: number; calls: number };
 };
 
-type Completion = {
-  choices?: { message?: { content?: string | null; tool_calls?: ToolCall[] } }[];
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
-  error?: { message?: string };
-};
+const Completion = type({
+  "choices?": type({
+    "message?": {
+      "content?": "string | null",
+      "tool_calls?": type({ id: "string", type: "'function'", function: { name: "string", arguments: "string" } }).array(),
+    },
+  }).array(),
+  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number" },
+  "error?": { "message?": "string" },
+});
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -72,12 +79,14 @@ export function createLlm(opts: {
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
 
-      const data = (await res.json().catch(() => undefined)) as Completion | undefined;
+      // A 200 with a body that is not a completion (proxy error page, truncation) is retried.
+      const parsed = Completion(await res.json().catch(() => undefined));
+      const data = parsed instanceof type.errors ? undefined : parsed;
       if (!data && attempt < 4) {
         await sleep(2 ** attempt * 3000);
         continue;
       }
-      if (!data) throw new Error(`${opts.model}: response body is not JSON`);
+      if (!data) throw new Error(`${opts.model}: response is not a chat completion`);
       const message = data.choices?.[0]?.message;
       if (!message) throw new Error(`${opts.model}: empty response ${data.error?.message ?? ""}`);
       usage.calls += 1;

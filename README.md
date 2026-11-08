@@ -24,7 +24,7 @@ The score comes from the verified findings, never from the model's opinion, so i
 | 2/5 | A critical issue (security, privacy, data loss, broken build) |
 | 1/5 | Several critical issues |
 
-On every push, earlier findings are re-checked: they show as fixed, still open, or new. A finding whose thread you resolve or reply to counts as dismissed and is not raised again.
+On every push, earlier findings are re-checked: they show as fixed, still open, or new. A fixed finding gets a "Fixed in" reply, its thread is resolved and the comment is collapsed as outdated. A finding whose thread you resolve or reply to counts as dismissed and is not raised again.
 
 ## Use it
 
@@ -77,6 +77,7 @@ Without anything else, comments come from `github-actions[bot]`. To post under y
         with:
           api_key: ${{ secrets.REVIEWPILOT_API_KEY }}
           github_token: ${{ steps.app.outputs.token }}
+          bot_login: ${{ steps.app.outputs.app-slug }}[bot]
 ```
 
 ## Configure
@@ -121,6 +122,7 @@ rules:
 | `model` | from config | Overrides `model.name` |
 | `verify_model` | from config | Overrides `model.verify` |
 | `github_token` | `github.token` | An App token posts as that App's bot |
+| `bot_login` | `github-actions[bot]` | The account the token posts as; only its comments are trusted as ReviewPilot's state |
 
 ## Develop
 

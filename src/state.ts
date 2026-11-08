@@ -3,32 +3,37 @@
 // database is needed.
 
 import { createHash } from "node:crypto";
+import { type } from "arktype";
 
 export const SEVERITIES = ["critical", "major", "minor"] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
-export type Finding = {
-  file: string;
-  line: number;
-  endLine: number;
-  severity: Severity;
-  title: string;
-  body: string;
+const FindingSchema = type({
+  file: "string",
+  line: "number.integer",
+  endLine: "number.integer",
+  severity: type.enumerated(...SEVERITIES),
+  title: "string",
+  body: "string",
   /** Exact lines that prove the finding, as `file:line` with the code. */
-  evidence: string[];
-  rule?: string;
-};
+  evidence: "string[]",
+  "rule?": "string",
+});
 
-export type Tracked = Finding & {
-  fp: string;
-  status: "open" | "fixed" | "dismissed";
+const TrackedSchema = FindingSchema.and({
+  fp: "string",
+  status: "'open' | 'fixed' | 'dismissed'",
   /** Review comment id of the inline comment, once posted. */
-  commentId?: number;
-};
+  "commentId?": "number",
+});
 
-export type State = { head: string; score: Score; findings: Tracked[] };
+/** The state stored in the summary comment. It is read back as untrusted input. */
+const StateSchema = type({ head: "string", score: "1 | 2 | 3 | 4 | 5", findings: TrackedSchema.array() });
 
-export type Score = 1 | 2 | 3 | 4 | 5;
+export type Finding = typeof FindingSchema.infer;
+export type Tracked = typeof TrackedSchema.infer;
+export type State = typeof StateSchema.infer;
+export type Score = State["score"];
 
 /**
  * The score is derived from verified findings, never asked of the model, so it only moves
@@ -59,7 +64,8 @@ export function readState(body: string): State | undefined {
   const json = body.match(MARKER)?.[1];
   if (!json) return undefined;
   try {
-    return JSON.parse(Buffer.from(json, "base64").toString("utf8")) as State;
+    const out = StateSchema(JSON.parse(Buffer.from(json, "base64").toString("utf8")));
+    return out instanceof type.errors ? undefined : out;
   } catch {
     return undefined;
   }

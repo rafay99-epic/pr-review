@@ -19,6 +19,9 @@ inputs:
   github_token:
     description: Token to read the PR and post. A GitHub App installation token posts as that app's bot.
     default: ${{ github.token }}
+  bot_login:
+    description: Login the token posts as, e.g. `my-app[bot]`. Only comments from this account (or github-actions[bot]) are trusted as ReviewPilot's own.
+    default: github-actions[bot]
 
 runs:
   using: node24
