@@ -128,12 +128,17 @@ rules:
 
 ## Develop
 
+A Turborepo with two workspaces: `packages/action` (the reviewer) and `apps/web` (the site and docs, [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)).
+
 ```sh
 pnpm install
-pnpm test && pnpm typecheck
-pnpm build                                   # bundles to dist/, which is committed
-REVIEWPILOT_API_KEY=... node scripts/local.ts owner/repo 123   # dry run on a real PR, posts nothing
+pnpm check                                   # typecheck, test and build everything
+pnpm dev                                     # run the site locally
+pnpm --filter @reviewpilot/action build      # bundle the action to packages/action/dist (committed)
+REVIEWPILOT_API_KEY=... pnpm --filter @reviewpilot/action local owner/repo 123   # dry run on a real PR, posts nothing
 ```
+
+`ci.yml` runs the checks on every PR and fails if `packages/action/dist` is stale. `site.yml` builds the site; Vercel deploys it from `apps/web` (see `apps/web/vercel.json`).
 
 ## My repos
 
