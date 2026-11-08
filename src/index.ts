@@ -128,7 +128,11 @@ async function main() {
       if (p.status !== "open") return p;
       const c = checked.find((x) => x.previous?.fp === p.fp);
       if (!c?.verdict) return p;
-      return c.verdict.verdict === "confirmed" ? { ...p, ...settle(p, c.verdict), fp: p.fp } : { ...p, status: "fixed" as const };
+      if (c.verdict.verdict !== "confirmed") return { ...p, status: "fixed" as const };
+      // Keep the original wording so the summary matches the inline thread; only the
+      // location and severity follow the current code.
+      const { line, endLine, severity } = settle(p, c.verdict);
+      return { ...p, line, endLine, severity };
     });
     const minRank = SEVERITIES.indexOf(config.review.min_severity);
     const confirmed = checked
