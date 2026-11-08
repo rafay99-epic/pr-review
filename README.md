@@ -124,7 +124,7 @@ rules:
 | `model` | from config | Overrides `model.name` |
 | `verify_model` | from config | Overrides `model.verify` |
 | `github_token` | `github.token` | An App token posts as that App's bot |
-| `bot_login` | `github-actions[bot]` | The account the token posts as; only its comments are trusted as ReviewPilot's state |
+| `bot_login` | `github-actions[bot]` | The account the token posts as. Only its comments and `github-actions[bot]`'s are trusted as ReviewPilot's state |
 
 ## Develop
 
