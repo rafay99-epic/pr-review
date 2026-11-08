@@ -141,13 +141,13 @@ body {
   }
 }
 
-/* Score bars grow once when their round is revealed. */
+/* Score bars grow once when their round is revealed; without JS (or in print) they are full. */
 .round-bar {
-  width: 0;
+  width: var(--w);
   transition: width 1.2s var(--ease-out-expo) 0.3s;
 }
-[data-reveal="shown"] .round-bar {
-  width: var(--w);
+.js [data-reveal]:not([data-reveal="shown"]) .round-bar {
+  width: 0;
 }
 
 /* Docs prose: generated from markdown, styled here rather than with a plugin. */

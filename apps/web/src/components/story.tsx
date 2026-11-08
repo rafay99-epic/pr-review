@@ -81,7 +81,7 @@ function FindPanel() {
   ] as const;
   return (
     <div className="font-mono text-[13px] leading-7">
-      <div className="text-mute">part 3 of 4 · 6 files</div>
+      <div className="text-mute">part 3 of 4 · 5 tool calls</div>
       {lines.map(([tool, arg], i) => (
         <div key={arg} className="step-line flex gap-3" style={{ "--n": i }}>
           <span className="text-green">{tool}</span>
