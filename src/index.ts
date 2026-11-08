@@ -66,7 +66,10 @@ async function main() {
   let summaryId = existing?.id;
   if (!dryRun) {
     const body = progressBody(pr.head.sha, prev ? writeState(prev) : undefined);
-    summaryId = summaryId ? (await gh.editComment(summaryId, body)).id : (await gh.comment(number, body)).id;
+    // A summary written under another identity (say github-actions[bot] before the App
+    // was set up) cannot be edited: post a new one and carry its state over.
+    const edited = summaryId ? await gh.editComment(summaryId, body).catch(() => undefined) : undefined;
+    summaryId = edited?.id ?? (await gh.comment(number, body)).id;
   }
 
   try {
@@ -221,7 +224,7 @@ async function main() {
     // first run, say it failed instead of leaving "reviewing..." up.
     if (!dryRun && summaryId) {
       const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-      const body = existing?.body ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}\n\nSee the [workflow run](${runUrl}). Comment \`/review\` to retry.\n${SUMMARY_TAG}`;
+      const body = (existing?.id === summaryId ? existing?.body : undefined) ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}\n\nSee the [workflow run](${runUrl}). Comment \`/review\` to retry.\n${SUMMARY_TAG}`;
       await gh.editComment(summaryId, body).catch(() => undefined);
     }
     throw e;

@@ -16882,7 +16882,8 @@ async function main() {
   let summaryId = existing?.id;
   if (!dryRun) {
     const body = progressBody(pr.head.sha, prev ? writeState(prev) : void 0);
-    summaryId = summaryId ? (await gh.editComment(summaryId, body)).id : (await gh.comment(number2, body)).id;
+    const edited = summaryId ? await gh.editComment(summaryId, body).catch(() => void 0) : void 0;
+    summaryId = edited?.id ?? (await gh.comment(number2, body)).id;
   }
   try {
     const mergeBase = await checkoutPr(root, number2, pr.head.sha, pr.base.sha);
@@ -17012,7 +17013,7 @@ ${summaryBody(state, prev, outside, run2)}`);
   } catch (e) {
     if (!dryRun && summaryId) {
       const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-      const body = existing?.body ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
+      const body = (existing?.id === summaryId ? existing?.body : void 0) ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
 
 See the [workflow run](${runUrl}). Comment \`/review\` to retry.
 ${SUMMARY_TAG}`;
