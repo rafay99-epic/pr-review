@@ -16381,13 +16381,23 @@ function createGitHub(token, repo) {
         }))
       }));
     },
-    /** Closes a fixed finding: resolves its thread and collapses the comment as outdated. */
+    /**
+     * Closes a fixed finding: collapses its comment as outdated, then resolves the thread.
+     * GitHub only lets an App resolve threads with Contents write, which a reviewer should
+     * not need, so without it the thread stays open but collapsed. Returns whether it resolved.
+     */
     async close(thread) {
-      await graphql(done, "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: thread.id });
       const root = thread.comments[0];
       if (root) {
         await graphql(done, "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}", { id: root.id });
       }
+      return graphql(done, "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: thread.id }).then(
+        () => true,
+        (e) => {
+          if (/not accessible by integration/i.test(String(e))) return false;
+          throw e;
+        }
+      );
     }
   };
 }
@@ -17240,13 +17250,20 @@ ${summaryBody(state, prev, outside, run2)}`);
       for (const old of summaries) {
         if (old.id !== summaryId) await gh.retire(old).catch((e) => log.warn(`Could not retire summary ${old.id}: ${String(e)}`));
       }
+      let unresolved = 0;
       await pool(fixedNow, 2, async (f) => {
         if (f.commentId !== void 0) {
           await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e) => log.warn(`Reply on ${f.fp} failed: ${String(e)}`));
         }
         const t = threadOf(f);
-        if (t && !t.resolved) await gh.close(t).catch((e) => log.warn(`Closing ${f.fp} failed: ${String(e)}`));
+        if (!t || t.resolved) return;
+        const resolved = await gh.close(t).catch((e) => {
+          log.warn(`Closing ${f.fp} failed: ${String(e)}`);
+          return true;
+        });
+        if (!resolved) unresolved += 1;
       });
+      if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
     });
     await log.report({
       score: state.score,

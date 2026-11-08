@@ -26,7 +26,7 @@ The score comes from the verified findings, never from the model's opinion, so i
 | 2/5 | A critical issue (security, privacy, data loss, broken build) |
 | 1/5 | Several critical issues |
 
-On every push, earlier findings are re-checked: they show as fixed, still open, or new. A fixed finding gets a "Fixed in" reply, its thread is resolved and the comment is collapsed as outdated. A finding whose thread you resolve or reply to counts as dismissed and is not raised again.
+On every push, earlier findings are re-checked: they show as fixed, still open, or new. A fixed finding gets a "Fixed in" reply and its comment is collapsed as outdated; the thread is also resolved when the token has Contents write (GitHub requires it for Apps to resolve threads). A finding whose thread you resolve or reply to counts as dismissed and is not raised again.
 
 ## Use it
 

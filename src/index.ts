@@ -274,15 +274,22 @@ async function main() {
         if (old.id !== summaryId) await gh.retire(old).catch((e: unknown) => log.warn(`Could not retire summary ${old.id}: ${String(e)}`));
       }
 
-      // Close what got fixed: a "Fixed in" reply, then resolve the thread and collapse it.
-      // Two at a time stays under GitHub's secondary rate limit on new comments.
+      // Close what got fixed: a "Fixed in" reply, then collapse the comment and resolve the
+      // thread. Two at a time stays under GitHub's secondary rate limit on new comments.
+      let unresolved = 0;
       await pool(fixedNow, 2, async (f) => {
         if (f.commentId !== undefined) {
           await gh.reply(number, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e: unknown) => log.warn(`Reply on ${f.fp} failed: ${String(e)}`));
         }
         const t = threadOf(f);
-        if (t && !t.resolved) await gh.close(t).catch((e: unknown) => log.warn(`Closing ${f.fp} failed: ${String(e)}`));
+        if (!t || t.resolved) return;
+        const resolved = await gh.close(t).catch((e: unknown) => {
+          log.warn(`Closing ${f.fp} failed: ${String(e)}`);
+          return true;
+        });
+        if (!resolved) unresolved += 1;
       });
+      if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
     });
 
     await log.report({

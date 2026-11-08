@@ -174,13 +174,23 @@ export function createGitHub(token: string, repo: string) {
       }));
     },
 
-    /** Closes a fixed finding: resolves its thread and collapses the comment as outdated. */
-    async close(thread: Thread) {
-      await graphql(done, "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: thread.id });
+    /**
+     * Closes a fixed finding: collapses its comment as outdated, then resolves the thread.
+     * GitHub only lets an App resolve threads with Contents write, which a reviewer should
+     * not need, so without it the thread stays open but collapsed. Returns whether it resolved.
+     */
+    async close(thread: Thread): Promise<boolean> {
       const root = thread.comments[0];
       if (root) {
         await graphql(done, "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}", { id: root.id });
       }
+      return graphql(done, "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: thread.id }).then(
+        () => true,
+        (e: unknown) => {
+          if (/not accessible by integration/i.test(String(e))) return false;
+          throw e;
+        },
+      );
     },
   };
 }
