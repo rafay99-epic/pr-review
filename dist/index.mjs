@@ -16303,9 +16303,12 @@ function createGitHub(token, repo) {
         signal: AbortSignal.timeout(3e4)
       }).catch((e) => e instanceof Error ? e : new Error(String(e)));
       const status = res instanceof Error ? 0 : res.status;
-      const retryable = status === 429 || idempotent && (status === 0 || status >= 500);
+      const after = res instanceof Error ? null : res.headers.get("retry-after");
+      const limited = status === 429 || status === 403 && after !== null;
+      const retryable = limited || idempotent && (status === 0 || status >= 500);
       if (retryable && attempt < 3) {
-        await sleep(2 ** attempt * 1e3);
+        const wait = after !== null ? Number(after) * 1e3 : NaN;
+        await sleep(Number.isFinite(wait) && wait > 0 ? Math.min(wait, 6e4) : 2 ** attempt * 1e3);
         continue;
       }
       if (res instanceof Error) throw new Error(`GitHub ${method} ${path}: ${res.message}`);
@@ -16447,14 +16450,19 @@ function createLlm(opts) {
         continue;
       }
       if (!res.ok) {
-        const detail = "text" in res ? await res.text() : String(res.error);
+        const detail = "text" in res ? await res.text().catch((e) => String(e)) : String(res.error);
         if (res.status === 400 && sendEffort && /reasoning/i.test(detail) && attempt < 4) {
           sendEffort = false;
           continue;
         }
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
-      const text = await res.text();
+      const text = await res.text().catch(() => void 0);
+      if (text === void 0 && attempt < 4 && left() > 15e3) {
+        await sleep2(2 ** attempt * 3e3);
+        continue;
+      }
+      if (text === void 0) throw new Error(`${opts.model}: the response body could not be read`);
       let json3;
       try {
         json3 = JSON.parse(text);
@@ -16678,11 +16686,13 @@ async function runTool(root, name, args2) {
       const start = Math.max(1, num(args2.start_line, 1));
       if (start > lines.length) return `${str(args2.path)} has only ${lines.length} lines.`;
       const end = Math.max(start, Math.min(lines.length, num(args2.end_line, start + MAX_LINES - 1), start + MAX_LINES - 1));
-      const body = lines.slice(start - 1, end).map((text2, i) => `${String(start + i).padStart(5)}  ${text2.length > 2e3 ? `${text2.slice(0, 2e3)} [line cut]` : text2}`).join("\n").slice(0, 8e4);
+      const body = lines.slice(start - 1, end).map((text2, i) => `${String(start + i).padStart(5)}  ${text2.length > 2e3 ? `${text2.slice(0, 2e3)} [line cut]` : text2}`).join("\n");
+      const capped = body.length > 8e4 ? `${body.slice(0, 8e4)}
+[output cut at 80,000 characters; read a smaller range]` : body;
       const more = end < lines.length ? `
 [lines ${end + 1}-${lines.length} not shown]` : "";
       return `${str(args2.path)} (${lines.length} lines)
-${body}${more}`;
+${capped}${more}`;
     }
     if (name === "search") {
       const pattern = str(args2.pattern);
@@ -16692,7 +16702,7 @@ ${body}${more}`;
         return "Error: path must be repository-relative.";
       }
       const pathspec = scope2.includes("*") ? `:(glob)${scope2}` : scope2;
-      const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...pathspec ? [pathspec] : []];
+      const argv = ["grep", "-n", "-I", "-E", "--no-color", "--max-count=20", "-e", pattern, "--", ...pathspec ? [pathspec] : []];
       const { stdout } = await run("git", argv, { cwd: root, maxBuffer: 8 * 1024 * 1024 }).catch(
         (e) => e.code === 1 ? { stdout: "" } : Promise.reject(e)
       );
@@ -17076,7 +17086,7 @@ async function main() {
   const event = Event.assert(process.env.GITHUB_EVENT_PATH ? JSON.parse(await readFile2(process.env.GITHUB_EVENT_PATH, "utf8")) : {});
   const comment = event.comment;
   if (comment) {
-    if (!/^\/review\b/.test(comment.body.trim())) return log.line("Comment is not /review, nothing to do.");
+    if (!/^\/review(\s|$)/.test(comment.body.trim())) return log.line("Comment is not /review, nothing to do.");
     if (!event.issue?.pull_request) return log.line("Comment is not on a pull request, nothing to do.");
     if (!MAINTAINERS.has(comment.author_association)) {
       return log.line(`/review from ${comment.user.login} (${comment.author_association}) ignored: only owners, members and collaborators can run it.`);

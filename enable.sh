@@ -17,7 +17,11 @@ body='Adds ReviewPilot review on PRs opened by the repo owner.
 
 The workflow calls the shared one in rafay99-epic/reviewpilot. An agent reads the diff and the code around it, a second pass re-checks every finding against the code, and only confirmed findings are posted, as `reviewpilot[bot]`. The summary comment carries a 1-5 score and what changed since the last push. Once this is merged, comment `/review` to re-run it (comment commands only run from the default branch).'
 
+failed=()
 for repo in "$@"; do
+  # One repo failing (auth, permissions) is reported and the rest still run.
+  if ! (
+  set -e
   GH_TOKEN=$(gh auth token --user "${repo%%/*}")
   export GH_TOKEN
   base=$(gh api "repos/$repo" --jq .default_branch)
@@ -48,4 +52,11 @@ for repo in "$@"; do
   else
     gh pr create -R "$repo" --base "$base" --head "$branch" --title "ci: review PRs with ReviewPilot" --body "$body"
   fi
+  ); then
+    failed+=("$repo")
+  fi
 done
+if (( ${#failed[@]} )); then
+  echo "Failed: ${failed[*]}" >&2
+  exit 1
+fi

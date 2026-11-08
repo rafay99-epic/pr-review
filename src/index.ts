@@ -59,7 +59,7 @@ async function main() {
   const event = Event.assert(process.env.GITHUB_EVENT_PATH ? JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8")) : {});
   const comment = event.comment;
   if (comment) {
-    if (!/^\/review\b/.test(comment.body.trim())) return log.line("Comment is not /review, nothing to do.");
+    if (!/^\/review(\s|$)/.test(comment.body.trim())) return log.line("Comment is not /review, nothing to do.");
     if (!event.issue?.pull_request) return log.line("Comment is not on a pull request, nothing to do.");
     // Checked here too, not only in the caller's workflow: a run spends the owner's key.
     if (!MAINTAINERS.has(comment.author_association)) {

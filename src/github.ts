@@ -87,9 +87,13 @@ export function createGitHub(token: string, repo: string) {
       }).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e))));
 
       const status = res instanceof Error ? 0 : res.status;
-      const retryable = status === 429 || (idempotent && (status === 0 || status >= 500));
+      // 403 with Retry-After is GitHub's secondary rate limit; it is safe to retry like a 429.
+      const after = res instanceof Error ? null : res.headers.get("retry-after");
+      const limited = status === 429 || (status === 403 && after !== null);
+      const retryable = limited || (idempotent && (status === 0 || status >= 500));
       if (retryable && attempt < 3) {
-        await sleep(2 ** attempt * 1000);
+        const wait = after !== null ? Number(after) * 1000 : NaN;
+        await sleep(Number.isFinite(wait) && wait > 0 ? Math.min(wait, 60_000) : 2 ** attempt * 1000);
         continue;
       }
       if (res instanceof Error) throw new Error(`GitHub ${method} ${path}: ${res.message}`);

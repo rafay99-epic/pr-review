@@ -96,10 +96,10 @@ export async function runTool(root: string, name: string, args: Record<string, u
       const body = lines
         .slice(start - 1, end)
         .map((text, i) => `${String(start + i).padStart(5)}  ${text.length > 2000 ? `${text.slice(0, 2000)} [line cut]` : text}`)
-        .join("\n")
-        .slice(0, 80_000);
+        .join("\n");
+      const capped = body.length > 80_000 ? `${body.slice(0, 80_000)}\n[output cut at 80,000 characters; read a smaller range]` : body;
       const more = end < lines.length ? `\n[lines ${end + 1}-${lines.length} not shown]` : "";
-      return `${str(args.path)} (${lines.length} lines)\n${body}${more}`;
+      return `${str(args.path)} (${lines.length} lines)\n${capped}${more}`;
     }
     if (name === "search") {
       const pattern = str(args.pattern);
@@ -111,7 +111,8 @@ export async function runTool(root: string, name: string, args: Record<string, u
       }
       // A scope with wildcards is a glob ('**/*.ts'); plain git pathspecs do not cross directories.
       const pathspec = scope.includes("*") ? `:(glob)${scope}` : scope;
-      const argv = ["grep", "-n", "-I", "-E", "--no-color", "-e", pattern, "--", ...(pathspec ? [pathspec] : [])];
+      // At most 20 matches per file keeps a broad pattern from overflowing the output buffer.
+      const argv = ["grep", "-n", "-I", "-E", "--no-color", "--max-count=20", "-e", pattern, "--", ...(pathspec ? [pathspec] : [])];
       const { stdout } = await run("git", argv, { cwd: root, maxBuffer: 8 * 1024 * 1024 }).catch(
         (e: { code?: number; stdout?: string }) => (e.code === 1 ? { stdout: "" } : Promise.reject(e)),
       );

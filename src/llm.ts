@@ -81,7 +81,7 @@ export function createLlm(opts: {
         continue;
       }
       if (!res.ok) {
-        const detail = "text" in res ? await res.text() : String(res.error);
+        const detail = "text" in res ? await res.text().catch((e: unknown) => String(e)) : String(res.error);
         if (res.status === 400 && sendEffort && /reasoning/i.test(detail) && attempt < 4) {
           sendEffort = false;
           continue;
@@ -90,7 +90,13 @@ export function createLlm(opts: {
       }
 
       // A 200 with a body that is not a completion (proxy error page, truncation) is retried.
-      const text = await res.text();
+      // A connection dropped while reading the body is retried like one dropped before it.
+      const text = await res.text().catch(() => undefined);
+      if (text === undefined && attempt < 4 && left() > 15_000) {
+        await sleep(2 ** attempt * 3000);
+        continue;
+      }
+      if (text === undefined) throw new Error(`${opts.model}: the response body could not be read`);
       let json: unknown;
       try {
         json = JSON.parse(text);
