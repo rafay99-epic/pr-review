@@ -16489,10 +16489,11 @@ var seconds = (ms) => ms >= 6e4 ? `${Math.floor(ms / 6e4)}m ${Math.floor(ms % 6e
 function createLog(actions) {
   const phases = [];
   const safe = (text) => actions ? text.replace(/^::/gm, ": :") : text;
+  const encode = (text) => text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
   return {
     phases,
     line: (text) => console.log(safe(text)),
-    warn: (text) => console.log(actions ? `::warning::${safe(text).replace(/\n/g, " ")}` : `warning: ${text}`),
+    warn: (text) => console.log(actions ? `::warning::${encode(text)}` : `warning: ${text}`),
     /** Runs one phase inside a log group and records how long it took. */
     async phase(name, fn2) {
       const start = performance.now();
@@ -16670,7 +16671,9 @@ async function runTool(root, name, args2) {
       const full = await inside(root, str(args2.path));
       if (!full) return "Error: no such file in the repository.";
       if ((await stat(full)).size > MAX_BYTES) return `${str(args2.path)} is larger than 2 MB, which is too big to read; use search instead.`;
-      const text = await readFile(full, "utf8");
+      const bytes = await readFile(full);
+      if (bytes.subarray(0, 8e3).includes(0)) return `${str(args2.path)} is a binary file.`;
+      const text = bytes.toString("utf8");
       const lines = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
       const start = Math.max(1, num(args2.start_line, 1));
       if (start > lines.length) return `${str(args2.path)} has only ${lines.length} lines.`;
@@ -17106,10 +17109,9 @@ async function main() {
     const model = input("model") ?? config.model.name;
     const verifyModel = input("verify_model") ?? config.model.verify;
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
-    const { diffs, skipped, guidance, threads } = await log.phase("Diff and context", async () => {
-      const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter(
-        (d) => !ignored(config, d.path) && d.commentable.size > 0
-      );
+    const { diffs, skipped, guidance, threads, touched } = await log.phase("Diff and context", async () => {
+      const all = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore));
+      const reviewable = all.filter((d) => !ignored(config, d.path) && d.commentable.size > 0);
       let size = 0;
       const diffs2 = reviewable.filter((d) => {
         if (size + d.numbered.length > MAX_DIFF_CHARS) return false;
@@ -17128,7 +17130,7 @@ ${text}` : "";
         })
       ]);
       log.line(`${diffs2.length} files, ${size.toLocaleString("en")} characters of diff, ${threads2.length} review threads`);
-      return { diffs: diffs2, skipped: reviewable.length - diffs2.length, guidance: guidance2, threads: threads2 };
+      return { diffs: diffs2, skipped: reviewable.length - diffs2.length, guidance: guidance2, threads: threads2, touched: new Set(all.map((d) => d.path)) };
     });
     const threadOf = (f) => threads.find(
       (t) => f.commentId !== void 0 ? t.comments[0]?.databaseId === f.commentId : ours(t.comments[0]?.author) && lastMarker(t.comments[0]?.body ?? "", FINDING_TAG) === f.fp
@@ -17136,6 +17138,10 @@ ${text}` : "";
     const minRank = SEVERITIES.indexOf(config.review.min_severity);
     const previous = (prev?.findings ?? []).map((f) => ({ ...f }));
     for (const p of previous.filter((f) => f.status === "open")) {
+      if (!touched.has(p.file)) {
+        p.status = "fixed";
+        continue;
+      }
       const t = threadOf(p);
       const replied = t?.comments.slice(1).some((c) => c.author === pr.user.login || MAINTAINERS.has(c.association));
       const resolved = t?.resolved && !ours(t.resolvedBy);

@@ -4,3 +4,5 @@ results*.json*
 diff.txt
 node_modules/
 .mocks/
+.turbo/
+apps/web/dist/

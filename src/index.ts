@@ -100,11 +100,10 @@ async function main() {
     const verifyModel = input("verify_model") ?? config.model.verify;
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
 
-    const { diffs, skipped, guidance, threads } = await log.phase("Diff and context", async () => {
+    const { diffs, skipped, guidance, threads, touched } = await log.phase("Diff and context", async () => {
+      const all = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore));
       // Files without hunks (binary, mode-only changes) have nothing to review.
-      const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter(
-        (d) => !ignored(config, d.path) && d.commentable.size > 0,
-      );
+      const reviewable = all.filter((d) => !ignored(config, d.path) && d.commentable.size > 0);
       // Fill the budget file by file; a file that does not fit is skipped, later ones still get in.
       let size = 0;
       const diffs = reviewable.filter((d) => {
@@ -123,7 +122,7 @@ async function main() {
         }),
       ]);
       log.line(`${diffs.length} files, ${size.toLocaleString("en")} characters of diff, ${threads.length} review threads`);
-      return { diffs, skipped: reviewable.length - diffs.length, guidance, threads };
+      return { diffs, skipped: reviewable.length - diffs.length, guidance, threads, touched: new Set(all.map((d) => d.path)) };
     });
 
     // A finding's thread is the one whose first comment is the finding's own inline comment.
@@ -141,6 +140,11 @@ async function main() {
     const minRank = SEVERITIES.indexOf(config.review.min_severity);
     const previous: Tracked[] = (prev?.findings ?? []).map((f) => ({ ...f }));
     for (const p of previous.filter((f) => f.status === "open")) {
+      // The PR no longer changes this file (reverted, or now ignored): nothing left to check.
+      if (!touched.has(p.file)) {
+        p.status = "fixed";
+        continue;
+      }
       const t = threadOf(p);
       const replied = t?.comments.slice(1).some((c) => c.author === pr.user.login || MAINTAINERS.has(c.association));
       const resolved = t?.resolved && !ours(t.resolvedBy);

@@ -11,11 +11,13 @@ const seconds = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${M
 export function createLog(actions: boolean) {
   const phases: { name: string; ms: number }[] = [];
   const safe = (text: string) => (actions ? text.replace(/^::/gm, ": :") : text);
+  // Workflow command data must percent-encode %, CR and LF, or the message is cut short.
+  const encode = (text: string) => text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 
   return {
     phases,
     line: (text: string) => console.log(safe(text)),
-    warn: (text: string) => console.log(actions ? `::warning::${safe(text).replace(/\n/g, " ")}` : `warning: ${text}`),
+    warn: (text: string) => console.log(actions ? `::warning::${encode(text)}` : `warning: ${text}`),
 
     /** Runs one phase inside a log group and records how long it took. */
     async phase<T>(name: string, fn: () => Promise<T>): Promise<T> {

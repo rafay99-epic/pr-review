@@ -85,7 +85,10 @@ export async function runTool(root: string, name: string, args: Record<string, u
       const full = await inside(root, str(args.path));
       if (!full) return "Error: no such file in the repository.";
       if ((await stat(full)).size > MAX_BYTES) return `${str(args.path)} is larger than 2 MB, which is too big to read; use search instead.`;
-      const text = await readFile(full, "utf8");
+      const bytes = await readFile(full);
+      // A NUL byte means binary: decoding it as text would only feed the model noise.
+      if (bytes.subarray(0, 8000).includes(0)) return `${str(args.path)} is a binary file.`;
+      const text = bytes.toString("utf8");
       const lines = (text.endsWith("\n") ? text.slice(0, -1) : text).split("\n");
       const start = Math.max(1, num(args.start_line, 1));
       if (start > lines.length) return `${str(args.path)} has only ${lines.length} lines.`;
