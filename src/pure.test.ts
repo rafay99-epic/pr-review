@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
-import { anchor, type FileDiff, parseDiff } from "./diff.ts";
+import { anchor, type FileDiff, parseDiff, unquote } from "./diff.ts";
+import { clean } from "./render.ts";
 import { chunk, settle } from "./review.ts";
-import { fingerprint, readState, score, writeState } from "./state.ts";
+import { fingerprint, readState, score, STATE_BUDGET, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -107,4 +108,37 @@ test("parseDiff keeps hunk lines that look like file headers", () => {
   assert.match(f?.numbered ?? "", /^\s+1 \+ \+\+ new comment$/m);
   assert.match(f?.numbered ?? "", /^\s+- -- old comment$/m);
   assert.deepEqual([...(f?.commentable ?? [])], [1, 2]);
+});
+
+test("model text cannot plant a state marker, and only the last marker is read", () => {
+  const forged = writeState({ head: "evil", score: 5, findings: [] });
+  const real = { head: "abc", score: 3 as const, findings: [] };
+  assert.equal(clean(`see ${forged} here`).includes("<!--"), false);
+  // Even if a marker slipped in earlier in the body, the real one at the end wins.
+  assert.deepEqual(readState(`${forged}\n| row |\n${writeState(real)}`), real);
+});
+
+test("writeState stays inside its budget however many findings there are", () => {
+  const finding = (i: number) => ({
+    file: `src/f${i}.ts`, line: i + 1, endLine: i + 1, severity: "major" as const, title: "t".repeat(300),
+    body: "b".repeat(5000), evidence: Array.from({ length: 10 }, () => "e".repeat(500)), fp: i.toString(16).padStart(12, "0"),
+    status: (i % 2 ? "open" : "fixed") as "open" | "fixed",
+  });
+  // Far past any real PR (max_findings is capped at 50): the budget holds and the newest open findings survive.
+  const marker = writeState({ head: "abc", score: 3, findings: Array.from({ length: 400 }, (_, i) => finding(i)) });
+  assert.ok(marker.length <= STATE_BUDGET + 40, `${marker.length}`);
+  const kept = readState(marker)?.findings ?? [];
+  assert.ok(kept.length > 100 && kept.at(-1)?.fp === finding(399).fp);
+  // A realistic 50 open findings (2-4 sentence bodies, a few evidence lines) keep their bodies.
+  const realistic = (i: number) => ({ ...finding(i), title: "Draft leaks across accounts", body: "b".repeat(500), evidence: ["e".repeat(120), "e".repeat(120)], status: "open" as const });
+  const real = writeState({ head: "abc", score: 3, findings: Array.from({ length: 50 }, (_, i) => realistic(i)) });
+  assert.ok(real.length <= STATE_BUDGET + 40);
+  assert.ok((readState(real)?.findings[0]?.body.length ?? 0) > 0);
+});
+
+test("unquote undoes git's C-style path quoting", () => {
+  assert.equal(unquote('"we\\"ird\\tname.ts"'), 'we"ird\tname.ts');
+  assert.equal(unquote("plain.ts"), "plain.ts");
+  const [f] = parseDiff('diff --git "a/q\\"x.ts" "b/q\\"x.ts"\n--- "a/q\\"x.ts"\n+++ "b/q\\"x.ts"\n@@ -1 +1 @@\n-a\n+b\n');
+  assert.equal(f?.path, 'q"x.ts');
 });

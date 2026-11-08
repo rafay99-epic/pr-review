@@ -13,11 +13,8 @@ permissions:
   issues: write
   pull-requests: write
 
-# Pushes cancel a stale review. Each comment gets its own group, because ReviewPilot's own
-# comments are issue_comment events too and would otherwise cancel the run that posts them.
-concurrency:
-  group: reviewpilot-${{ github.event.pull_request.number || format('comment-{0}', github.event.comment.id) }}
-  cancel-in-progress: true
+# Runs are never cancelled mid-review: a cancel between posting comments and saving state
+# would make the next run post them again. The job-level group queues runs per PR instead.
 
 jobs:
   review:

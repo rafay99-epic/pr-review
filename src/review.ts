@@ -1,74 +1,57 @@
-// The two passes. Find: one agent reads the diff, pulls whatever context it needs and lists
-// candidate defects. Verify: a fresh agent per candidate tries to disprove it against the
-// code, and only what survives is posted.
+// The two passes. Find: one agent per part of the diff reads it, pulls whatever context it
+// needs and lists candidate defects. Verify: a fresh agent per candidate tries to disprove it
+// against the code, and only what survives is posted.
 
 import { type } from "arktype";
 import type { Submit } from "./agent.ts";
 import { runAgent } from "./agent.ts";
 import type { Config, Rule } from "./config.ts";
 import type { FileDiff } from "./diff.ts";
-import type { Llm } from "./llm.ts";
+import type { Llm, ToolSpec } from "./llm.ts";
 import { bySeverity } from "./render.ts";
 import { type Finding, SEVERITIES, type Severity, type Tracked } from "./state.ts";
+import { inside } from "./tools.ts";
 
 const Severity = type.enumerated(...SEVERITIES);
 
+// Each schema below is both the validator for what the model submits and, through
+// toJsonSchema(), the tool definition the model sees, so the two cannot drift apart.
 const Candidate = type({
-  file: "string > 0",
-  line: "number.integer > 0",
-  "end_line?": "number.integer > 0",
+  file: type("string > 0").describe("Repository-relative path"),
+  line: type("number.integer > 0").describe("First line of the defect at the PR head"),
+  "end_line?": type("number.integer > 0").describe("Last line, if it spans several"),
   severity: Severity,
-  title: "string > 0",
-  body: "string > 0",
-  evidence: "string[] > 0",
-  "rule?": "string",
+  title: type("string > 0").describe("A few words stating the defect"),
+  body: type("string > 0").describe("What breaks, the trigger, and the result. 2-4 plain sentences."),
+  evidence: type("string[] > 0").describe('Lines that prove it, each "path:line: code"'),
+  "rule?": type("string").describe("Repository rule id, if the finding breaks one"),
 });
 
-const Findings = type({ checked_files: "string[]", findings: Candidate.array() });
+const Findings = type({
+  checked_files: type("string[]").describe("Every changed file you checked"),
+  findings: Candidate.array(),
+});
 
 const Verdict = type({
   verdict: "'confirmed' | 'rejected'",
-  reason: "string > 0",
-  evidence: "string[]",
+  reason: type("string > 0").describe("One or two sentences"),
+  evidence: type("string[]").describe('Lines you checked, each "path:line: code"'),
   severity: Severity,
-  "title?": "string",
-  "body?": "string",
-  "line?": "number.integer > 0",
-  "end_line?": "number.integer > 0",
+  "title?": type("string").describe("Corrected title, if confirmed and the original is off"),
+  "body?": type("string").describe("Corrected body, if confirmed and the original overstates or misdescribes it"),
+  "line?": type("number.integer > 0").describe("Corrected first line at the PR head, if the cited one is wrong"),
+  "end_line?": type("number.integer > 0").describe("Corrected last line, if the cited one is wrong"),
 });
 
-const candidateSchema = {
-  type: "object",
-  properties: {
-    file: { type: "string", description: "Repository-relative path" },
-    line: { type: "integer", description: "First line of the defect at the PR head" },
-    end_line: { type: "integer", description: "Last line, if it spans several" },
-    severity: { type: "string", enum: SEVERITIES },
-    title: { type: "string", description: "A few words stating the defect" },
-    body: { type: "string", description: "What breaks, the trigger, and the result. 2-4 plain sentences." },
-    evidence: { type: "array", items: { type: "string" }, description: 'Lines that prove it, each "path:line: code"' },
-    rule: { type: "string", description: "Repository rule id, if the finding breaks one" },
-  },
-  required: ["file", "line", "severity", "title", "body", "evidence"],
-};
+/** A tool definition whose parameters are generated from an ArkType schema. */
+function toolSpec(name: string, description: string, schema: type.Any): ToolSpec {
+  const parameters = Object.fromEntries(Object.entries(schema.toJsonSchema()).filter(([key]) => key !== "$schema"));
+  return { type: "function", function: { name, description, parameters } };
+}
 
 function submitFindings(changed: readonly string[]): Submit<Finding[]> {
   return {
-    spec: {
-      type: "function",
-      function: {
-        name: "submit_findings",
-        description: "Submit the review. Call once, after checking every changed file.",
-        parameters: {
-          type: "object",
-          properties: {
-            checked_files: { type: "array", items: { type: "string" }, description: "Every changed file you checked" },
-            findings: { type: "array", items: candidateSchema },
-          },
-          required: ["checked_files", "findings"],
-        },
-      },
-    },
+    spec: toolSpec("submit_findings", "Submit the review. Call once, after checking every changed file.", Findings),
     parse(args, final) {
       const out = Findings(args);
       if (out instanceof type.errors) return { ok: false, error: out.summary };
@@ -78,7 +61,7 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
       return {
         ok: true,
         value: out.findings.map((c) => ({
-          file: c.file,
+          file: c.file.replace(/^\.\//, ""),
           line: c.line,
           endLine: Math.max(c.line, c.end_line ?? c.line),
           severity: c.severity,
@@ -95,27 +78,7 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
 export type VerdictResult = typeof Verdict.infer;
 
 const submitVerdict: Submit<VerdictResult> = {
-  spec: {
-    type: "function",
-    function: {
-      name: "submit_verdict",
-      description: "Submit the verdict on the finding.",
-      parameters: {
-        type: "object",
-        properties: {
-          verdict: { type: "string", enum: ["confirmed", "rejected"] },
-          reason: { type: "string", description: "One or two sentences" },
-          evidence: { type: "array", items: { type: "string" }, description: 'Lines you checked, each "path:line: code"' },
-          severity: { type: "string", enum: SEVERITIES },
-          title: { type: "string", description: "Corrected title, if confirmed and the original is off" },
-          body: { type: "string", description: "Corrected body, if confirmed and the original overstates or misdescribes it" },
-          line: { type: "integer", description: "Corrected first line at the PR head, if the cited one is wrong" },
-          end_line: { type: "integer", description: "Corrected last line, if the cited one is wrong" },
-        },
-        required: ["verdict", "reason", "evidence", "severity"],
-      },
-    },
-  },
+  spec: toolSpec("submit_verdict", "Submit the verdict on the finding.", Verdict),
   parse(args) {
     const out = Verdict(args);
     return out instanceof type.errors ? { ok: false, error: out.summary } : { ok: true, value: out };
@@ -174,7 +137,7 @@ function repoSection(config: Config, rules: readonly Rule[], guidance: string): 
   return parts.length ? `\n\n${parts.join("\n\n")}` : "";
 }
 
-const pool = async <T, R>(items: readonly T[], size: number, fn: (item: T, index: number) => Promise<R>) => {
+export const pool = async <T, R>(items: readonly T[], size: number, fn: (item: T, index: number) => Promise<R>) => {
   const results: R[] = new Array(items.length);
   const queue = items.entries();
   // Workers share one iterator, so each item is taken exactly once.
@@ -271,7 +234,16 @@ export async function review(
     });
   });
   const failedParts = parts.filter((p) => p === undefined).length;
-  const found = parts.flatMap((p) => p ?? []).sort(bySeverity);
+  // A candidate must point at a file that exists in the checkout (a model steered by the PR
+  // could otherwise put arbitrary text in a link), and may only cite rules that exist.
+  const ruleIds = new Set(input.rules.map((r) => r.id));
+  const candidates = parts.flatMap((p) => p ?? []);
+  const exists = await Promise.all(candidates.map((c) => inside(input.root, c.file).then(Boolean)));
+  const found = candidates
+    .filter((_, i) => exists[i])
+    .map(({ rule, ...c }) => (rule && ruleIds.has(rule) ? { ...c, rule } : c))
+    .sort(bySeverity);
+  if (found.length < candidates.length) log(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
   log(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
 
   const jobs: { finding: Finding; previous?: Tracked }[] = [
@@ -312,7 +284,7 @@ export async function review(
     return { finding, ...(verdict ? { verdict } : {}), ...(prev ? { previous: prev } : {}) };
   });
 
-  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY), failedParts, parts: chunks.length };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length };
 }
 
 const Groups = type({ duplicates: "string[][]" });

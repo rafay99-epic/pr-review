@@ -24,7 +24,7 @@ const FileConfig = type({
   "review?": {
     "ignore?": "string[]",
     "min_severity?": Severity,
-    "max_findings?": "number.integer > 0",
+    "max_findings?": "0 < number.integer <= 50",
   },
   "rules?": Rule.array(),
   "instructions?": "string",

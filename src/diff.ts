@@ -14,6 +14,12 @@ export type FileDiff = {
 
 const HUNK = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 
+const ESCAPES: Record<string, string> = { n: "\n", t: "\t", '"': '"', "\\": "\\" };
+
+/** Git quotes paths with quotes, tabs or newlines C-style (`"a\"b.ts"`); this undoes it. */
+export const unquote = (path: string) =>
+  path.startsWith('"') && path.endsWith('"') ? path.slice(1, -1).replace(/\\(.)/g, (_, c: string) => ESCAPES[c] ?? c) : path;
+
 export function parseDiff(raw: string): FileDiff[] {
   const files: FileDiff[] = [];
   let file: FileDiff | undefined;
@@ -39,11 +45,12 @@ export function parseDiff(raw: string): FileDiff[] {
     else if (text.startsWith("deleted file mode")) file.status = "deleted";
     else if (text.startsWith("rename to ")) {
       file.status = "renamed";
-      file.path = text.slice("rename to ".length);
-    } else if (hunk < 0 && text.startsWith("+++ b/")) {
+      file.path = unquote(text.slice("rename to ".length));
+    } else if (hunk < 0 && (text.startsWith("+++ b/") || text.startsWith('+++ "b/'))) {
       // The +++ line carries the new path verbatim, spaces included. Header lines only
       // count before the first hunk: inside a hunk "+++ x" is an added line "++ x".
-      file.path = text.slice("+++ b/".length);
+      const raw = text.slice("+++ ".length);
+      file.path = unquote(raw).replace(/^b\//, "");
     } else if (hunk < 0 && (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index "))) {
       continue;
     } else if (text.startsWith("@@")) {

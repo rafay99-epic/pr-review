@@ -53,15 +53,18 @@ export function fingerprint(f: Pick<Finding, "file" | "title">): string {
   return createHash("sha1").update(`${f.file}\n${title}`).digest("hex").slice(0, 12);
 }
 
-/** A new finding near an earlier one in the same file is treated as the same finding. */
+/** A new finding within two lines of an earlier one in the same file is treated as the same finding. */
 export function sameIssue(a: Pick<Finding, "file" | "line">, b: Pick<Finding, "file" | "line">): boolean {
-  return a.file === b.file && Math.abs(a.line - b.line) <= 5;
+  return a.file === b.file && Math.abs(a.line - b.line) <= 2;
 }
 
-const MARKER = /<!-- reviewpilot:state (.+?) -->/s;
+/** The last match of a marker in a body: ReviewPilot writes its own markers at the end. */
+export const lastMarker = (body: string, marker: RegExp) => [...body.matchAll(marker)].at(-1)?.[1];
+
+const MARKER = /<!-- reviewpilot:state ([A-Za-z0-9+/=]+) -->/g;
 
 export function readState(body: string): State | undefined {
-  const json = body.match(MARKER)?.[1];
+  const json = lastMarker(body, MARKER);
   if (!json) return undefined;
   try {
     const out = StateSchema(JSON.parse(Buffer.from(json, "base64").toString("utf8")));
@@ -71,22 +74,44 @@ export function readState(body: string): State | undefined {
   }
 }
 
+/** Encoded state never exceeds this, leaving room for the markdown in a 65,536-character comment. */
+export const STATE_BUDGET = 48_000;
+
 /**
- * Fixed and dismissed findings keep only what matching needs, and only the latest 100 of
- * them, so the summary stays under GitHub's 65,536-character comment limit on long PRs.
+ * Encodes state within STATE_BUDGET. Closed findings keep only what matching needs (latest
+ * 100); open ones are trimmed in steps (evidence, then bodies, then the oldest closed) until
+ * it fits, so a long-lived PR can never push the summary past GitHub's comment limit.
  */
 export function writeState(state: State): string {
-  const open = state.findings
-    .filter((f) => f.status === "open")
-    .map((f) => ({ ...f, body: f.body.slice(0, 1500), evidence: f.evidence.slice(0, 6).map((e) => e.slice(0, 300)) }));
-  const closed = state.findings
-    .filter((f) => f.status !== "open")
-    .slice(-100)
-    .map((f) => ({ ...f, body: "", evidence: [] }));
-  const json = JSON.stringify({ ...state, findings: [...open, ...closed] });
-  return `<!-- reviewpilot:state ${Buffer.from(json).toString("base64")} -->`;
+  const open = state.findings.filter((f) => f.status === "open");
+  let closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
+  const steps = [
+    (f: Tracked) => ({ ...f, title: f.title.slice(0, 200), body: f.body.slice(0, 1500), evidence: f.evidence.slice(0, 6).map((e) => e.slice(0, 300)) }),
+    (f: Tracked) => ({ ...f, title: f.title.slice(0, 200), body: f.body.slice(0, 600), evidence: f.evidence.slice(0, 2).map((e) => e.slice(0, 200)) }),
+    (f: Tracked) => ({ ...f, title: f.title.slice(0, 160), body: f.body.slice(0, 300), evidence: f.evidence.slice(0, 1).map((e) => e.slice(0, 160)) }),
+    (f: Tracked) => ({ ...f, title: f.title.slice(0, 120), body: "", evidence: [] }),
+    (f: Tracked) => ({ ...f, title: f.title.slice(0, 60), body: "", evidence: [] }),
+  ];
+  const encode = (findings: Tracked[]) => Buffer.from(JSON.stringify({ ...state, findings })).toString("base64");
+  let out = "";
+  for (const step of steps) {
+    out = encode([...open.map(step), ...closed]);
+    if (out.length <= STATE_BUDGET) break;
+  }
+  // Still too big: closed findings go first, then the oldest open ones (a last resort no
+  // real PR should reach; the newest findings are the ones a reader is acting on).
+  let kept = open.map(steps.at(-1) ?? ((f: Tracked) => f));
+  while (out.length > STATE_BUDGET && closed.length) {
+    closed = closed.slice(Math.ceil(closed.length / 2));
+    out = encode([...kept, ...closed]);
+  }
+  while (out.length > STATE_BUDGET && kept.length) {
+    kept = kept.slice(Math.ceil(kept.length / 10));
+    out = encode(kept);
+  }
+  return `<!-- reviewpilot:state ${out} -->`;
 }
 
 export const SUMMARY_TAG = "<!-- reviewpilot:summary -->";
 export const findingTag = (fp: string) => `<!-- reviewpilot:fp=${fp} -->`;
-export const FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/;
+export const FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/g;

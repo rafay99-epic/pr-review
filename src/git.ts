@@ -27,9 +27,12 @@ export const diff = (root: string, from: string, to: string, ignore: readonly st
   git(root, "-c", "core.quotePath=off", "diff", "--no-color", "--no-ext-diff", "-M", "--unified=5", from, to, "--", ".",
     ...ignore.map((g) => `:(glob,exclude)${g}`));
 
-/** A file's content on a ref, or undefined if it does not exist there. */
+/** A file's content on a ref, or undefined if it does not exist there. Any other git failure throws. */
 export const readAt = (root: string, ref: string, path: string) =>
-  git(root, "show", `${ref}:${path}`).catch(() => undefined);
+  git(root, "show", `${ref}:${path}`).catch((e: { stderr?: string }) => {
+    if (/does not exist in|exists on disk, but not in/.test(e.stderr ?? "")) return undefined;
+    throw e;
+  });
 
 export async function fetchRef(root: string, branch: string): Promise<string> {
   await git(root, "fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/reviewpilot/default`);

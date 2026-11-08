@@ -15,9 +15,7 @@ branch=ci/reviewpilot
 content=$(base64 < caller.yml | tr -d '\n')
 body='Adds ReviewPilot review on PRs opened by the repo owner.
 
-The workflow calls the shared one in rafay99-epic/reviewpilot. An agent reads the diff and the code around it, a second pass re-checks every finding against the code, and only confirmed findings are posted, as `reviewpilot[bot]`. The summary comment carries a 1-5 score and what changed since the last push. Once this is merged, comment `/review` to re-run it (comment commands only run from the default branch).
-
-Built with Claude Opus 5.5 in Claude Code, running in T3 Code.'
+The workflow calls the shared one in rafay99-epic/reviewpilot. An agent reads the diff and the code around it, a second pass re-checks every finding against the code, and only confirmed findings are posted, as `reviewpilot[bot]`. The summary comment carries a 1-5 score and what changed since the last push. Once this is merged, comment `/review` to re-run it (comment commands only run from the default branch).'
 
 for repo in "$@"; do
   GH_TOKEN=$(gh auth token --user "${repo%%/*}")

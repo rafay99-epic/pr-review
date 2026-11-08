@@ -67,7 +67,7 @@ export const TOOL_SPECS: ToolSpec[] = [
  * .git. Symlinks are resolved first: a PR can commit a link to `.git/config` (which holds
  * the checkout token) or to a file outside the checkout.
  */
-async function inside(root: string, path: string): Promise<string | undefined> {
+export async function inside(root: string, path: string): Promise<string | undefined> {
   const real = await realpath(resolve(root, path)).catch(() => undefined);
   if (!real) return undefined;
   const rel = relative(await realpath(root), real);

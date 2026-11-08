@@ -17,8 +17,8 @@ export type ToolSpec = {
 
 export type Llm = {
   model: string;
-  /** `force` names a tool the model must call this turn. */
-  chat(messages: Message[], tools: ToolSpec[], force?: string): Promise<Extract<Message, { role: "assistant" }>>;
+  /** `force` names a tool the model must call this turn; `deadline` (epoch ms) caps timeouts and retries. */
+  chat(messages: Message[], tools: ToolSpec[], force?: string, deadline?: number): Promise<Extract<Message, { role: "assistant" }>>;
   usage: { prompt: number; completion: number; calls: number };
 };
 
@@ -45,8 +45,13 @@ export function createLlm(opts: {
   const usage = { prompt: 0, completion: 0, calls: 0 };
   const url = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
-  async function chat(messages: Message[], tools: ToolSpec[], force?: string) {
-    // Rate limits and upstream hiccups are common on shared tiers: back off and retry a few times.
+  // Dropped after a provider rejects it, so one 400 does not fail every later call.
+  let sendEffort = opts.effort !== "none";
+
+  async function chat(messages: Message[], tools: ToolSpec[], force?: string, deadline?: number) {
+    // Rate limits and upstream hiccups are common on shared tiers: back off and retry a few
+    // times, but never past the caller's deadline (one call cannot outlive its agent's budget).
+    const left = () => (deadline === undefined ? Infinity : deadline - Date.now());
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, {
         method: "POST",
@@ -61,13 +66,14 @@ export function createLlm(opts: {
           tools,
           tool_choice: force ? { type: "function", function: { name: force } } : "auto",
           // "none" leaves the parameter out, for providers that reject it.
-          ...(opts.effort === "none" ? {} : { reasoning_effort: opts.effort }),
+          ...(sendEffort ? { reasoning_effort: opts.effort } : {}),
         }),
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 240_000),
+        // At least 60s even past the deadline: the forced final call must still get an answer.
+        signal: AbortSignal.timeout(Math.max(60_000, Math.min(opts.timeoutMs ?? 240_000, left()))),
       }).catch((e: unknown) => ({ ok: false, status: 0, error: e }) as const);
 
       const retryable = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);
-      if (retryable && attempt < 4) {
+      if (retryable && attempt < 4 && left() > 15_000) {
         // Retry-After is either seconds or an HTTP date.
         const header = "headers" in res ? res.headers.get("retry-after") : null;
         const wait = header ? (Number(header) * 1000 || Date.parse(header) - Date.now()) : NaN;
@@ -76,13 +82,17 @@ export function createLlm(opts: {
       }
       if (!res.ok) {
         const detail = "text" in res ? await res.text() : String(res.error);
+        if (res.status === 400 && sendEffort && /reasoning/i.test(detail) && attempt < 4) {
+          sendEffort = false;
+          continue;
+        }
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
 
       // A 200 with a body that is not a completion (proxy error page, truncation) is retried.
       const parsed = Completion(await res.json().catch(() => undefined));
       const data = parsed instanceof type.errors ? undefined : parsed;
-      if (!data && attempt < 4) {
+      if (!data && attempt < 4 && left() > 15_000) {
         await sleep(2 ** attempt * 3000);
         continue;
       }

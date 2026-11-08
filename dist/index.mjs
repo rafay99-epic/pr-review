@@ -7362,7 +7362,7 @@ var require_dist = __commonJS({
 });
 
 // src/index.ts
-import { appendFile, readFile as readFile2 } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 
 // node_modules/.pnpm/@ark+util@0.56.8/node_modules/@ark/util/out/arrays.js
 var liftArray = (data) => Array.isArray(data) ? data : [data];
@@ -7962,16 +7962,16 @@ var describeCollapsibleDate = (date) => {
   const dayOfMonth = date.getDate();
   const hours = date.getHours();
   const minutes = date.getMinutes();
-  const seconds = date.getSeconds();
+  const seconds2 = date.getSeconds();
   const milliseconds = date.getMilliseconds();
-  if (month === 0 && dayOfMonth === 1 && hours === 0 && minutes === 0 && seconds === 0 && milliseconds === 0)
+  if (month === 0 && dayOfMonth === 1 && hours === 0 && minutes === 0 && seconds2 === 0 && milliseconds === 0)
     return `${year}`;
   const datePortion = `${months[month]} ${dayOfMonth}, ${year}`;
-  if (hours === 0 && minutes === 0 && seconds === 0 && milliseconds === 0)
+  if (hours === 0 && minutes === 0 && seconds2 === 0 && milliseconds === 0)
     return datePortion;
   const h = hours % 12 || 12;
   const suffix2 = hours < 12 ? " AM" : " PM";
-  let timePortion = seconds || milliseconds ? `${h}:${pad(minutes, 2)}:${pad(seconds, 2)}` : `${h}:${pad(minutes, 2)}`;
+  let timePortion = seconds2 || milliseconds ? `${h}:${pad(minutes, 2)}:${pad(seconds2, 2)}` : `${h}:${pad(minutes, 2)}`;
   if (milliseconds)
     timePortion += `.${pad(milliseconds, 3)}`;
   return `${timePortion + suffix2}, ${datePortion}`;
@@ -16020,11 +16020,12 @@ function fingerprint(f) {
 ${title}`).digest("hex").slice(0, 12);
 }
 function sameIssue(a, b) {
-  return a.file === b.file && Math.abs(a.line - b.line) <= 5;
+  return a.file === b.file && Math.abs(a.line - b.line) <= 2;
 }
-var MARKER = /<!-- reviewpilot:state (.+?) -->/s;
+var lastMarker = (body, marker) => [...body.matchAll(marker)].at(-1)?.[1];
+var MARKER = /<!-- reviewpilot:state ([A-Za-z0-9+/=]+) -->/g;
 function readState(body) {
-  const json3 = body.match(MARKER)?.[1];
+  const json3 = lastMarker(body, MARKER);
   if (!json3) return void 0;
   try {
     const out = StateSchema(JSON.parse(Buffer.from(json3, "base64").toString("utf8")));
@@ -16033,15 +16034,37 @@ function readState(body) {
     return void 0;
   }
 }
+var STATE_BUDGET = 48e3;
 function writeState(state) {
-  const open = state.findings.filter((f) => f.status === "open").map((f) => ({ ...f, body: f.body.slice(0, 1500), evidence: f.evidence.slice(0, 6).map((e) => e.slice(0, 300)) }));
-  const closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
-  const json3 = JSON.stringify({ ...state, findings: [...open, ...closed] });
-  return `<!-- reviewpilot:state ${Buffer.from(json3).toString("base64")} -->`;
+  const open = state.findings.filter((f) => f.status === "open");
+  let closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
+  const steps = [
+    (f) => ({ ...f, title: f.title.slice(0, 200), body: f.body.slice(0, 1500), evidence: f.evidence.slice(0, 6).map((e) => e.slice(0, 300)) }),
+    (f) => ({ ...f, title: f.title.slice(0, 200), body: f.body.slice(0, 600), evidence: f.evidence.slice(0, 2).map((e) => e.slice(0, 200)) }),
+    (f) => ({ ...f, title: f.title.slice(0, 160), body: f.body.slice(0, 300), evidence: f.evidence.slice(0, 1).map((e) => e.slice(0, 160)) }),
+    (f) => ({ ...f, title: f.title.slice(0, 120), body: "", evidence: [] }),
+    (f) => ({ ...f, title: f.title.slice(0, 60), body: "", evidence: [] })
+  ];
+  const encode = (findings) => Buffer.from(JSON.stringify({ ...state, findings })).toString("base64");
+  let out = "";
+  for (const step of steps) {
+    out = encode([...open.map(step), ...closed]);
+    if (out.length <= STATE_BUDGET) break;
+  }
+  let kept = open.map(steps.at(-1) ?? ((f) => f));
+  while (out.length > STATE_BUDGET && closed.length) {
+    closed = closed.slice(Math.ceil(closed.length / 2));
+    out = encode([...kept, ...closed]);
+  }
+  while (out.length > STATE_BUDGET && kept.length) {
+    kept = kept.slice(Math.ceil(kept.length / 10));
+    out = encode(kept);
+  }
+  return `<!-- reviewpilot:state ${out} -->`;
 }
 var SUMMARY_TAG = "<!-- reviewpilot:summary -->";
 var findingTag = (fp) => `<!-- reviewpilot:fp=${fp} -->`;
-var FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/;
+var FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/g;
 
 // src/config.ts
 var Severity = type.enumerated(...SEVERITIES);
@@ -16060,7 +16083,7 @@ var FileConfig = type({
   "review?": {
     "ignore?": "string[]",
     "min_severity?": Severity,
-    "max_findings?": "number.integer > 0"
+    "max_findings?": "0 < number.integer <= 50"
   },
   "rules?": Rule.array(),
   "instructions?": "string",
@@ -16124,6 +16147,8 @@ var rulesFor = (config, paths) => config.rules.filter((r) => !r.paths?.length ||
 
 // src/diff.ts
 var HUNK = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+var ESCAPES = { n: "\n", t: "	", '"': '"', "\\": "\\" };
+var unquote = (path) => path.startsWith('"') && path.endsWith('"') ? path.slice(1, -1).replace(/\\(.)/g, (_, c) => ESCAPES[c] ?? c) : path;
 function parseDiff(raw) {
   const files = [];
   let file;
@@ -16147,9 +16172,10 @@ function parseDiff(raw) {
     else if (text.startsWith("deleted file mode")) file.status = "deleted";
     else if (text.startsWith("rename to ")) {
       file.status = "renamed";
-      file.path = text.slice("rename to ".length);
-    } else if (hunk < 0 && text.startsWith("+++ b/")) {
-      file.path = text.slice("+++ b/".length);
+      file.path = unquote(text.slice("rename to ".length));
+    } else if (hunk < 0 && (text.startsWith("+++ b/") || text.startsWith('+++ "b/'))) {
+      const raw2 = text.slice("+++ ".length);
+      file.path = unquote(raw2).replace(/^b\//, "");
     } else if (hunk < 0 && (text.startsWith("+++ ") || text.startsWith("--- ") || text.startsWith("index "))) {
       continue;
     } else if (text.startsWith("@@")) {
@@ -16208,26 +16234,31 @@ var diff = (root, from, to, ignore) => git(
   ".",
   ...ignore.map((g) => `:(glob,exclude)${g}`)
 );
-var readAt = (root, ref, path) => git(root, "show", `${ref}:${path}`).catch(() => void 0);
+var readAt = (root, ref, path) => git(root, "show", `${ref}:${path}`).catch((e) => {
+  if (/does not exist in|exists on disk, but not in/.test(e.stderr ?? "")) return void 0;
+  throw e;
+});
 async function fetchRef(root, branch) {
   await git(root, "fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/reviewpilot/default`);
   return "refs/reviewpilot/default";
 }
 
 // src/github.ts
+var User = type({ login: "string" });
 var Pr = type({
   number: "number",
-  state: "string",
+  state: "'open' | 'closed'",
   draft: "boolean",
   title: "string",
   body: "string | null",
+  user: User,
   head: { sha: "string" },
   base: { ref: "string", sha: "string", repo: { default_branch: "string" } }
 });
-var User = type({ login: "string" });
-var IssueComment = type({ id: "number", body: "string", user: User.or("null") });
+var IssueComment = type({ id: "number", node_id: "string", body: "string", user: User.or("null") });
 var ReviewComment = type({ id: "number", body: "string", "in_reply_to_id?": "number", user: User.or("null") });
 var Created = type({ id: "number" });
+var GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 var ThreadsData = type({
   data: {
     repository: {
@@ -16236,8 +16267,15 @@ var ThreadsData = type({
           nodes: type({
             id: "string",
             isResolved: "boolean",
+            resolvedBy: User.or("null"),
             comments: {
-              nodes: type({ id: "string", databaseId: "number | null", body: "string", author: User.or("null") }).array()
+              nodes: type({
+                id: "string",
+                databaseId: "number | null",
+                body: "string",
+                authorAssociation: "string",
+                author: User.or("null")
+              }).array()
             }
           }).array()
         }
@@ -16245,25 +16283,37 @@ var ThreadsData = type({
     }
   }
 });
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function createGitHub(token, repo) {
   const api = process.env.GITHUB_API_URL ?? "https://api.github.com";
   async function call(schema2, method, path, body) {
-    const res = await fetch(`${api}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "reviewpilot",
-        ...body ? { "Content-Type": "application/json" } : {}
-      },
-      ...body ? { body: JSON.stringify(body) } : {}
-    });
-    if (!res.ok) throw new Error(`GitHub ${method} ${path}: ${res.status} ${(await res.text()).slice(0, 300)}`);
-    try {
-      return schema2.assert(res.status === 204 ? void 0 : await res.json());
-    } catch (e) {
-      throw new Error(`GitHub ${method} ${path}: unexpected response, ${e instanceof Error ? e.message : String(e)}`);
+    const idempotent = method !== "POST" || path === "/graphql";
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(`${api}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "reviewpilot",
+          ...body ? { "Content-Type": "application/json" } : {}
+        },
+        ...body ? { body: JSON.stringify(body) } : {},
+        signal: AbortSignal.timeout(3e4)
+      }).catch((e) => e instanceof Error ? e : new Error(String(e)));
+      const status = res instanceof Error ? 0 : res.status;
+      const retryable = status === 429 || idempotent && (status === 0 || status >= 500);
+      if (retryable && attempt < 3) {
+        await sleep(2 ** attempt * 1e3);
+        continue;
+      }
+      if (res instanceof Error) throw new Error(`GitHub ${method} ${path}: ${res.message}`);
+      if (!res.ok) throw new Error(`GitHub ${method} ${path}: ${res.status} ${(await res.text()).slice(0, 300)}`);
+      try {
+        return schema2.assert(res.status === 204 ? void 0 : await res.json());
+      } catch (e) {
+        throw new Error(`GitHub ${method} ${path}: unexpected response, ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
   }
   async function all(schema2, path) {
@@ -16276,17 +16326,25 @@ function createGitHub(token, repo) {
     }
     return out;
   }
-  const graphql = (schema2, query, variables) => call(schema2, "POST", "/graphql", { query, variables });
+  async function graphql(schema2, query, variables) {
+    const res = await call(GraphQlEnvelope, "POST", "/graphql", { query, variables });
+    if (res.errors?.length) throw new Error(`GitHub GraphQL: ${res.errors.map((e) => e.message).join("; ")}`);
+    try {
+      return schema2.assert(res);
+    } catch (e) {
+      throw new Error(`GitHub GraphQL: unexpected response, ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   const [owner, name] = repo.split("/");
   const r = `/repos/${repo}`;
-  const ignore = type("unknown");
+  const done = type("unknown");
   return {
     pr: (n) => call(Pr, "GET", `${r}/pulls/${n}`),
     issueComments: (n) => all(IssueComment, `${r}/issues/${n}/comments`),
     reviewComments: (n) => all(ReviewComment, `${r}/pulls/${n}/comments`),
     comment: (n, body) => call(Created, "POST", `${r}/issues/${n}/comments`, { body }),
     editComment: (id, body) => call(Created, "PATCH", `${r}/issues/comments/${id}`, { body }),
-    react: (commentId, content) => call(ignore, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
+    react: (commentId, content) => call(done, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
     reply: (n, commentId, body) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
     review: (n, commitId, comments) => call(Created, "POST", `${r}/pulls/${n}/reviews`, {
       commit_id: commitId,
@@ -16299,22 +16357,35 @@ function createGitHub(token, repo) {
         body: c.body
       }))
     }),
+    /** Removes an old summary; if deleting is not allowed, collapses it as outdated instead. */
+    async retire(comment) {
+      await call(done, "DELETE", `${r}/issues/comments/${comment.id}`).catch(
+        () => graphql(done, "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}", { id: comment.node_id })
+      );
+    },
     async threads(n) {
       const query = `query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){pullRequest(number:$n){
-        reviewThreads(first:100){nodes{id isResolved comments(first:20){nodes{id databaseId body author{login}}}}}}}}`;
+        reviewThreads(first:100){nodes{id isResolved resolvedBy{login} comments(first:30){nodes{id databaseId body authorAssociation author{login}}}}}}}}`;
       const res = await graphql(ThreadsData, query, { owner, name, n });
       return res.data.repository.pullRequest.reviewThreads.nodes.map((t) => ({
         id: t.id,
         resolved: t.isResolved,
-        comments: t.comments.nodes.map((c) => ({ id: c.id, databaseId: c.databaseId, body: c.body, author: c.author?.login ?? "" }))
+        resolvedBy: t.resolvedBy?.login ?? "",
+        comments: t.comments.nodes.map((c) => ({
+          id: c.id,
+          databaseId: c.databaseId,
+          body: c.body,
+          author: c.author?.login ?? "",
+          association: c.authorAssociation
+        }))
       }));
     },
     /** Closes a fixed finding: resolves its thread and collapses the comment as outdated. */
     async close(thread) {
+      await graphql(done, "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: thread.id });
       const root = thread.comments[0];
-      await graphql(ignore, "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: thread.id });
       if (root) {
-        await graphql(ignore, "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}", { id: root.id });
+        await graphql(done, "mutation($id:ID!){minimizeComment(input:{subjectId:$id,classifier:OUTDATED}){minimizedComment{isMinimized}}}", { id: root.id });
       }
     }
   };
@@ -16331,11 +16402,13 @@ var Completion = type({
   "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number" },
   "error?": { "message?": "string" }
 });
-var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 function createLlm(opts) {
   const usage = { prompt: 0, completion: 0, calls: 0 };
   const url2 = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
-  async function chat(messages, tools, force) {
+  let sendEffort = opts.effort !== "none";
+  async function chat(messages, tools, force, deadline) {
+    const left = () => deadline === void 0 ? Infinity : deadline - Date.now();
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url2, {
         method: "POST",
@@ -16350,25 +16423,30 @@ function createLlm(opts) {
           tools,
           tool_choice: force ? { type: "function", function: { name: force } } : "auto",
           // "none" leaves the parameter out, for providers that reject it.
-          ...opts.effort === "none" ? {} : { reasoning_effort: opts.effort }
+          ...sendEffort ? { reasoning_effort: opts.effort } : {}
         }),
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 24e4)
+        // At least 60s even past the deadline: the forced final call must still get an answer.
+        signal: AbortSignal.timeout(Math.max(6e4, Math.min(opts.timeoutMs ?? 24e4, left())))
       }).catch((e) => ({ ok: false, status: 0, error: e }));
       const retryable = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);
-      if (retryable && attempt < 4) {
+      if (retryable && attempt < 4 && left() > 15e3) {
         const header = "headers" in res ? res.headers.get("retry-after") : null;
         const wait = header ? Number(header) * 1e3 || Date.parse(header) - Date.now() : NaN;
-        await sleep(Number.isFinite(wait) && wait > 0 ? Math.min(wait, 6e4) : 2 ** attempt * 3e3);
+        await sleep2(Number.isFinite(wait) && wait > 0 ? Math.min(wait, 6e4) : 2 ** attempt * 3e3);
         continue;
       }
       if (!res.ok) {
         const detail = "text" in res ? await res.text() : String(res.error);
+        if (res.status === 400 && sendEffort && /reasoning/i.test(detail) && attempt < 4) {
+          sendEffort = false;
+          continue;
+        }
         throw new Error(`${opts.model}: HTTP ${res.status} ${detail.slice(0, 300)}`);
       }
       const parsed2 = Completion(await res.json().catch(() => void 0));
       const data = parsed2 instanceof type.errors ? void 0 : parsed2;
-      if (!data && attempt < 4) {
-        await sleep(2 ** attempt * 3e3);
+      if (!data && attempt < 4 && left() > 15e3) {
+        await sleep2(2 ** attempt * 3e3);
         continue;
       }
       if (!data) throw new Error(`${opts.model}: response is not a chat completion`);
@@ -16387,23 +16465,74 @@ function createLlm(opts) {
   return { model: opts.model, chat, usage };
 }
 
+// src/log.ts
+import { appendFile } from "node:fs/promises";
+var seconds = (ms) => ms >= 6e4 ? `${Math.floor(ms / 6e4)}m ${Math.round(ms % 6e4 / 1e3)}s` : `${(ms / 1e3).toFixed(1)}s`;
+function createLog(actions) {
+  const phases = [];
+  const safe = (text) => actions ? text.replace(/^::/gm, ": :") : text;
+  return {
+    phases,
+    line: (text) => console.log(safe(text)),
+    warn: (text) => console.log(actions ? `::warning::${safe(text).replace(/\n/g, " ")}` : `warning: ${text}`),
+    /** Runs one phase inside a log group and records how long it took. */
+    async phase(name, fn2) {
+      const start = performance.now();
+      console.log(actions ? `::group::${name}` : `> ${name}`);
+      try {
+        return await fn2();
+      } finally {
+        const ms = Math.round(performance.now() - start);
+        phases.push({ name, ms });
+        if (actions) console.log("::endgroup::");
+        console.log(`${name}: ${seconds(ms)}`);
+      }
+    },
+    /** Appends the run report to the Actions job summary, when there is one. */
+    async report(facts) {
+      const file = process.env.GITHUB_STEP_SUMMARY;
+      if (!file) return;
+      const rows = phases.map((p) => `| ${p.name} | ${seconds(p.ms)} |`).join("\n");
+      const total = phases.reduce((sum, p) => sum + p.ms, 0);
+      await appendFile(
+        file,
+        [
+          `### ReviewPilot run: ${facts.score}/5`,
+          "",
+          `${facts.findings.new} new, ${facts.findings.open} open, ${facts.findings.fixed} fixed. ${facts.verified} of ${facts.candidates} candidates verified.`,
+          "",
+          "| Phase | Time |",
+          "| --- | --- |",
+          rows,
+          `| **Total** | **${seconds(total)}** |`,
+          "",
+          `Model \`${facts.model}\`: ${facts.usage.calls} calls, ${facts.usage.prompt.toLocaleString("en")} input and ${facts.usage.completion.toLocaleString("en")} output tokens.`,
+          ""
+        ].join("\n")
+      );
+    }
+  };
+}
+
 // src/render.ts
 var ORDER = { critical: 0, major: 1, minor: 2 };
 var bySeverity = (a, b) => ORDER[a.severity] - ORDER[b.severity];
-var flat = (text) => text.replace(/\s+/g, " ").trim();
+var clean = (text) => text.replace(/<!--|-->/g, "");
+var flat = (text) => clean(text).replace(/\s+/g, " ").trim();
+var linkText = (text) => flat(text).replace(/[[\]()]/g, "");
 var fence = (lines) => `\`\`\`text
 ${lines.join("\n").replaceAll("```", "'''")}
 \`\`\``;
 function inlineBody(f) {
-  const tag = f.rule ? ` \xB7 rule \`${f.rule}\`` : "";
+  const tag = f.rule ? ` \xB7 rule \`${linkText(f.rule)}\`` : "";
   return [
     `**${flat(f.title)}** \xB7 ${f.severity}${tag}`,
     "",
-    f.body,
+    clean(f.body),
     "",
     `<details><summary>Evidence</summary>
 
-${fence(f.evidence)}
+${fence(f.evidence.map(clean))}
 </details>`,
     findingTag(f.fp)
   ].join("\n");
@@ -16412,7 +16541,7 @@ function summaryBody(state, prev, outside, run2) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const fixed = state.findings.filter((f) => f.status === "fixed" && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
   const fresh = open.filter((f) => !prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
-  const link = (f) => `[${f.file.split("/").pop()}:${f.line}](https://github.com/${run2.repo}/blob/${run2.head}/${f.file}#L${f.line})`;
+  const link = (f) => `[${linkText(f.file.split("/").pop() ?? f.file)}:${f.line}](https://github.com/${run2.repo}/blob/${run2.head}/${f.file.split("/").map(encodeURIComponent).join("/")}#L${f.line})`;
   const lines = [`## ReviewPilot: ${state.score}/5`];
   if (prev && prev.head !== state.head) {
     const move = prev.score === state.score ? `${state.score}/5` : `${prev.score}/5 \u2192 ${state.score}/5`;
@@ -16439,7 +16568,7 @@ function summaryBody(state, prev, outside, run2) {
   const time = run2.seconds >= 60 ? `${Math.floor(run2.seconds / 60)}m ${run2.seconds % 60}s` : `${run2.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.files} files \xB7 ${run2.candidates === run2.verified ? `${run2.candidates} candidates checked` : `${run2.verified} of ${run2.candidates} candidates checked, most severe first`} \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.files} files \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state)
   );
@@ -16581,7 +16710,7 @@ async function runAgent(opts) {
         content: `You are out of time. Call ${name} now with what you have so far.`
       });
     }
-    const reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : void 0);
+    const reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : void 0, opts.deadline);
     messages.push(reply);
     const calls = reply.tool_calls ?? [];
     if (!calls.length) {
@@ -16621,57 +16750,36 @@ async function runAgent(opts) {
 // src/review.ts
 var Severity2 = type.enumerated(...SEVERITIES);
 var Candidate = type({
-  file: "string > 0",
-  line: "number.integer > 0",
-  "end_line?": "number.integer > 0",
+  file: type("string > 0").describe("Repository-relative path"),
+  line: type("number.integer > 0").describe("First line of the defect at the PR head"),
+  "end_line?": type("number.integer > 0").describe("Last line, if it spans several"),
   severity: Severity2,
-  title: "string > 0",
-  body: "string > 0",
-  evidence: "string[] > 0",
-  "rule?": "string"
+  title: type("string > 0").describe("A few words stating the defect"),
+  body: type("string > 0").describe("What breaks, the trigger, and the result. 2-4 plain sentences."),
+  evidence: type("string[] > 0").describe('Lines that prove it, each "path:line: code"'),
+  "rule?": type("string").describe("Repository rule id, if the finding breaks one")
 });
-var Findings = type({ checked_files: "string[]", findings: Candidate.array() });
+var Findings = type({
+  checked_files: type("string[]").describe("Every changed file you checked"),
+  findings: Candidate.array()
+});
 var Verdict = type({
   verdict: "'confirmed' | 'rejected'",
-  reason: "string > 0",
-  evidence: "string[]",
+  reason: type("string > 0").describe("One or two sentences"),
+  evidence: type("string[]").describe('Lines you checked, each "path:line: code"'),
   severity: Severity2,
-  "title?": "string",
-  "body?": "string",
-  "line?": "number.integer > 0",
-  "end_line?": "number.integer > 0"
+  "title?": type("string").describe("Corrected title, if confirmed and the original is off"),
+  "body?": type("string").describe("Corrected body, if confirmed and the original overstates or misdescribes it"),
+  "line?": type("number.integer > 0").describe("Corrected first line at the PR head, if the cited one is wrong"),
+  "end_line?": type("number.integer > 0").describe("Corrected last line, if the cited one is wrong")
 });
-var candidateSchema = {
-  type: "object",
-  properties: {
-    file: { type: "string", description: "Repository-relative path" },
-    line: { type: "integer", description: "First line of the defect at the PR head" },
-    end_line: { type: "integer", description: "Last line, if it spans several" },
-    severity: { type: "string", enum: SEVERITIES },
-    title: { type: "string", description: "A few words stating the defect" },
-    body: { type: "string", description: "What breaks, the trigger, and the result. 2-4 plain sentences." },
-    evidence: { type: "array", items: { type: "string" }, description: 'Lines that prove it, each "path:line: code"' },
-    rule: { type: "string", description: "Repository rule id, if the finding breaks one" }
-  },
-  required: ["file", "line", "severity", "title", "body", "evidence"]
-};
+function toolSpec(name, description, schema2) {
+  const parameters = Object.fromEntries(Object.entries(schema2.toJsonSchema()).filter(([key]) => key !== "$schema"));
+  return { type: "function", function: { name, description, parameters } };
+}
 function submitFindings(changed) {
   return {
-    spec: {
-      type: "function",
-      function: {
-        name: "submit_findings",
-        description: "Submit the review. Call once, after checking every changed file.",
-        parameters: {
-          type: "object",
-          properties: {
-            checked_files: { type: "array", items: { type: "string" }, description: "Every changed file you checked" },
-            findings: { type: "array", items: candidateSchema }
-          },
-          required: ["checked_files", "findings"]
-        }
-      }
-    },
+    spec: toolSpec("submit_findings", "Submit the review. Call once, after checking every changed file.", Findings),
     parse(args2, final) {
       const out = Findings(args2);
       if (out instanceof type.errors) return { ok: false, error: out.summary };
@@ -16680,7 +16788,7 @@ function submitFindings(changed) {
       return {
         ok: true,
         value: out.findings.map((c) => ({
-          file: c.file,
+          file: c.file.replace(/^\.\//, ""),
           line: c.line,
           endLine: Math.max(c.line, c.end_line ?? c.line),
           severity: c.severity,
@@ -16694,27 +16802,7 @@ function submitFindings(changed) {
   };
 }
 var submitVerdict = {
-  spec: {
-    type: "function",
-    function: {
-      name: "submit_verdict",
-      description: "Submit the verdict on the finding.",
-      parameters: {
-        type: "object",
-        properties: {
-          verdict: { type: "string", enum: ["confirmed", "rejected"] },
-          reason: { type: "string", description: "One or two sentences" },
-          evidence: { type: "array", items: { type: "string" }, description: 'Lines you checked, each "path:line: code"' },
-          severity: { type: "string", enum: SEVERITIES },
-          title: { type: "string", description: "Corrected title, if confirmed and the original is off" },
-          body: { type: "string", description: "Corrected body, if confirmed and the original overstates or misdescribes it" },
-          line: { type: "integer", description: "Corrected first line at the PR head, if the cited one is wrong" },
-          end_line: { type: "integer", description: "Corrected last line, if the cited one is wrong" }
-        },
-        required: ["verdict", "reason", "evidence", "severity"]
-      }
-    }
-  },
+  spec: toolSpec("submit_verdict", "Submit the verdict on the finding.", Verdict),
   parse(args2) {
     const out = Verdict(args2);
     return out instanceof type.errors ? { ok: false, error: out.summary } : { ok: true, value: out };
@@ -16840,7 +16928,11 @@ ${d.numbered}`).join("\n\n")}`
     });
   });
   const failedParts = parts.filter((p) => p === void 0).length;
-  const found = parts.flatMap((p) => p ?? []).sort(bySeverity);
+  const ruleIds = new Set(input2.rules.map((r) => r.id));
+  const candidates = parts.flatMap((p) => p ?? []);
+  const exists = await Promise.all(candidates.map((c) => inside(input2.root, c.file).then(Boolean)));
+  const found = candidates.filter((_, i) => exists[i]).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
+  if (found.length < candidates.length) log2(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
   log2(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
   const jobs = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
@@ -16877,7 +16969,7 @@ ${patchOf(finding.file)}`
     if (verdict) log2(`verify ${verdict.verdict}: ${finding.file}:${finding.line} ${finding.title} (${verdict.reason.slice(0, 160)})`);
     return { finding, ...verdict ? { verdict } : {}, ...prev ? { previous: prev } : {} };
   });
-  return { checked, candidates: found.length, verified: Math.min(found.length, MAX_VERIFY), failedParts, parts: chunks.length };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length };
 }
 var Groups = type({ duplicates: "string[][]" });
 async function dedupe(llm, root, findings, known, log2) {
@@ -16936,13 +17028,14 @@ var settle = (finding, verdict) => ({
 
 // src/index.ts
 var MAX_DIFF_CHARS = 4e5;
-var GUIDANCE_CHARS = 12e3;
+var GUIDANCE_CHARS = 1e4;
+var MAINTAINERS = /* @__PURE__ */ new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 var input = (name) => process.env[`INPUT_${name.toUpperCase()}`]?.trim() || void 0;
-var log = (line) => console.log(line);
+var log = createLog(process.env.GITHUB_ACTIONS === "true");
 var Event = type({
   "pull_request?": { number: "number" },
   "issue?": { number: "number", "pull_request?": "unknown" },
-  "comment?": { id: "number", body: "string" }
+  "comment?": { id: "number", body: "string", author_association: "string", user: { login: "string" } }
 });
 async function main() {
   const started = Date.now();
@@ -16950,99 +17043,128 @@ async function main() {
   const root = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const dryRun = process.env.REVIEWPILOT_DRY_RUN === "1";
   const token = input("github_token") ?? process.env.GITHUB_TOKEN ?? "";
-  const trusted = /* @__PURE__ */ new Set([input("bot_login") ?? "github-actions[bot]", "github-actions[bot]"]);
-  const ours = (login) => login !== void 0 && trusted.has(login);
   const apiKey = input("api_key") ?? process.env.REVIEWPILOT_API_KEY ?? "";
   if (!repo || !token || !apiKey) throw new Error("Needs GITHUB_REPOSITORY, a GitHub token and api_key.");
+  const botLogin = input("bot_login") ?? "github-actions[bot]";
+  const ours = (login) => login === botLogin || login === "github-actions[bot]";
   const event = Event.assert(process.env.GITHUB_EVENT_PATH ? JSON.parse(await readFile2(process.env.GITHUB_EVENT_PATH, "utf8")) : {});
   const comment = event.comment;
-  if (comment && !/^\/review\b/.test(comment.body.trim())) return log("Comment is not /review, nothing to do.");
-  if (comment && !event.issue?.pull_request) return log("Comment is not on a pull request, nothing to do.");
+  if (comment) {
+    if (!/^\/review\b/.test(comment.body.trim())) return log.line("Comment is not /review, nothing to do.");
+    if (!event.issue?.pull_request) return log.line("Comment is not on a pull request, nothing to do.");
+    if (!MAINTAINERS.has(comment.author_association)) {
+      return log.line(`/review from ${comment.user.login} (${comment.author_association}) ignored: only owners, members and collaborators can run it.`);
+    }
+  }
   const number2 = Number(process.env.REVIEWPILOT_PR) || event.pull_request?.number || event.issue?.number;
-  if (!number2) return log("No pull request in this event.");
+  if (!number2) return log.line("No pull request in this event.");
   const gh = createGitHub(token, repo);
   const pr = await gh.pr(number2);
-  if (pr.state !== "open" && !process.env.REVIEWPILOT_PR) return log(`PR #${number2} is ${pr.state}, skipping.`);
-  if (!comment && pr.draft) return log(`PR #${number2} is a draft, skipping.`);
+  if (pr.state !== "open" && !process.env.REVIEWPILOT_PR) return log.line(`PR #${number2} is ${pr.state}, skipping.`);
+  if (!comment && pr.draft) return log.line(`PR #${number2} is a draft, skipping.`);
   if (comment && !dryRun) await gh.react(comment.id, "eyes").catch(() => void 0);
-  const existing = (await gh.issueComments(number2)).find((c) => c.body.includes(SUMMARY_TAG) && ours(c.user?.login));
+  log.line(`Reviewing ${repo}#${number2} at ${pr.head.sha.slice(0, 7)} as ${botLogin}`);
+  const summaries = (await gh.issueComments(number2)).filter((c) => c.body.includes(SUMMARY_TAG) && ours(c.user?.login));
+  const existing = summaries.findLast((c) => c.user?.login === botLogin) ?? summaries.at(-1);
   const prev = existing ? readState(existing.body) : void 0;
-  let summaryId = existing?.id;
+  let summaryId = existing?.user?.login === botLogin ? existing.id : void 0;
   if (!dryRun) {
     const body = progressBody(pr.head.sha, prev ? writeState(prev) : void 0);
     const edited = summaryId ? await gh.editComment(summaryId, body).catch(() => void 0) : void 0;
     summaryId = edited?.id ?? (await gh.comment(number2, body)).id;
   }
   try {
-    const mergeBase = await checkoutPr(root, number2, pr.head.sha, pr.base.sha);
-    const trusted2 = await fetchRef(root, pr.base.repo.default_branch);
-    const { config, warning } = loadConfig(await readAt(root, trusted2, ".reviewpilot.yml"));
-    if (warning) log(warning);
+    const { config, warning, mergeBase, defaultRef } = await log.phase("Checkout", async () => {
+      const mergeBase2 = await checkoutPr(root, number2, pr.head.sha, pr.base.sha);
+      const defaultRef2 = await fetchRef(root, pr.base.repo.default_branch);
+      return { mergeBase: mergeBase2, defaultRef: defaultRef2, ...loadConfig(await readAt(root, defaultRef2, ".reviewpilot.yml")) };
+    });
+    if (warning) log.warn(warning);
     const model = input("model") ?? config.model.name;
     const verifyModel = input("verify_model") ?? config.model.verify;
     const baseUrl = input("base_url") ?? process.env.REVIEWPILOT_BASE_URL ?? "https://api.commandcode.ai/provider/v1";
-    const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter((d) => !ignored(config, d.path) && d.commentable.size > 0);
-    let size = 0;
-    const diffs = reviewable.filter((d) => {
-      if (size + d.numbered.length > MAX_DIFF_CHARS) return false;
-      size += d.numbered.length;
-      return true;
-    });
-    const skipped = reviewable.length - diffs.length;
-    const guidance = (await Promise.all(config.context_files.map(async (f) => {
-      const text = await readAt(root, trusted2, f);
-      return text ? `--- ${f} ---
+    const { diffs, skipped, guidance, threads } = await log.phase("Diff and context", async () => {
+      const reviewable = parseDiff(await diff(root, mergeBase, pr.head.sha, config.review.ignore)).filter(
+        (d) => !ignored(config, d.path) && d.commentable.size > 0
+      );
+      let size = 0;
+      const diffs2 = reviewable.filter((d) => {
+        if (size + d.numbered.length > MAX_DIFF_CHARS) return false;
+        size += d.numbered.length;
+        return true;
+      });
+      const [guidance2, threads2] = await Promise.all([
+        Promise.all(config.context_files.map(async (f) => {
+          const text = await readAt(root, defaultRef, f);
+          return text ? `--- ${f} ---
 ${text}` : "";
-    }))).join("\n").slice(0, GUIDANCE_CHARS);
+        })).then((parts2) => parts2.join("\n").slice(0, GUIDANCE_CHARS)),
+        gh.threads(number2).catch((e) => {
+          log.warn(`Could not read review threads, so dismissals and closing are skipped this run: ${String(e)}`);
+          return [];
+        })
+      ]);
+      log.line(`${diffs2.length} files, ${size.toLocaleString("en")} characters of diff, ${threads2.length} review threads`);
+      return { diffs: diffs2, skipped: reviewable.length - diffs2.length, guidance: guidance2, threads: threads2 };
+    });
+    const threadOf = (f) => threads.find(
+      (t) => f.commentId !== void 0 ? t.comments[0]?.databaseId === f.commentId : ours(t.comments[0]?.author) && lastMarker(t.comments[0]?.body ?? "", FINDING_TAG) === f.fp
+    );
+    const minRank = SEVERITIES.indexOf(config.review.min_severity);
     const previous = (prev?.findings ?? []).map((f) => ({ ...f }));
-    const threads = await gh.threads(number2).catch(() => []);
-    const fpOf = (t) => ours(t.comments[0]?.author) ? t.comments[0]?.body.match(FINDING_TAG)?.[1] : void 0;
-    for (const t of threads) {
-      const fp = fpOf(t);
-      const tracked = previous.find((p) => p.fp === fp && p.status === "open");
-      const replied = t.comments.slice(1).some((c) => c.author !== "" && !c.author.endsWith("[bot]"));
-      if (tracked && (t.resolved || replied)) tracked.status = "dismissed";
+    for (const p of previous.filter((f) => f.status === "open")) {
+      const t = threadOf(p);
+      const replied = t?.comments.slice(1).some((c) => c.author === pr.user.login || MAINTAINERS.has(c.association));
+      const resolved = t?.resolved && !ours(t.resolvedBy);
+      if (resolved || replied || SEVERITIES.indexOf(p.severity) > minRank) p.status = "dismissed";
     }
     const llm = (m) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates, verified, failedParts, parts } = await review({
-      find,
-      verify,
-      root,
-      config,
-      rules: rulesFor(config, diffs.map((d) => d.path)),
-      guidance,
-      pr: { title: pr.title, body: pr.body ?? "" },
-      diffs,
-      previous,
-      log
-    });
-    const findings = previous.map((p) => {
-      if (p.status !== "open") return p;
-      const c = checked.find((x) => x.previous?.fp === p.fp);
-      if (!c?.verdict) return p;
-      if (c.verdict.verdict !== "confirmed") return { ...p, status: "fixed" };
-      const { line, endLine, severity } = settle(p, c.verdict);
-      return { ...p, line, endLine, severity };
-    });
-    const minRank = SEVERITIES.indexOf(config.review.min_severity);
-    const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank).sort(bySeverity);
-    const known = findings.filter((t) => t.status !== "fixed");
-    const fresh = [];
-    let overCap = 0;
-    for (const f of await dedupe(find, root, confirmed, known, log)) {
-      const fp = fingerprint(f);
-      if ([...known, ...fresh].some((t) => t.fp === fp || sameIssue(t, f))) continue;
-      if (fresh.length >= config.review.max_findings) {
-        overCap += 1;
-        continue;
+    const { checked, candidates, verified, failedParts, parts } = await log.phase(
+      "Review",
+      () => review({
+        find,
+        verify,
+        root,
+        config,
+        rules: rulesFor(config, diffs.map((d) => d.path)),
+        guidance,
+        pr: { title: pr.title, body: pr.body ?? "" },
+        diffs,
+        previous,
+        log: log.line
+      })
+    );
+    const { findings, fresh, overCap } = await log.phase("Merge", async () => {
+      const findings2 = previous.map((p) => {
+        if (p.status !== "open") return p;
+        const c = checked.find((x) => x.previous === p);
+        if (!c?.verdict) return p;
+        if (c.verdict.verdict !== "confirmed") return { ...p, status: "fixed" };
+        const { line, endLine, severity } = settle(p, c.verdict);
+        return { ...p, line, endLine, severity };
+      });
+      const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank).sort(bySeverity);
+      const known = findings2.filter((t) => t.status !== "fixed");
+      const fresh2 = [];
+      let overCap2 = 0;
+      for (const f of await dedupe(find, root, confirmed, known, log.line)) {
+        const base = fingerprint(f);
+        const clash = [...findings2, ...fresh2].find((t) => t.fp === base && t.status !== "fixed" && Math.abs(t.line - f.line) > 20);
+        const fp = clash ? fingerprint({ file: f.file, title: `${f.title}@${f.line}` }) : base;
+        if ([...known, ...fresh2].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if (fresh2.length >= config.review.max_findings) {
+          overCap2 += 1;
+          continue;
+        }
+        const reopened = findings2.findIndex((t) => t.fp === fp && t.status === "fixed");
+        if (reopened >= 0) findings2.splice(reopened, 1);
+        fresh2.push({ ...f, fp, status: "open" });
       }
-      const reopened = findings.findIndex((t) => t.fp === fp && t.status === "fixed");
-      if (reopened >= 0) findings.splice(reopened, 1);
-      fresh.push({ ...f, fp, status: "open" });
-    }
-    findings.push(...fresh);
+      findings2.push(...fresh2);
+      return { findings: findings2, fresh: fresh2, overCap: overCap2 };
+    });
     const open = findings.filter((f) => f.status === "open");
     const state = { head: pr.head.sha, score: score(open), findings };
     const byPath = new Map(diffs.map((d) => [d.path, d]));
@@ -17053,17 +17175,19 @@ ${text}` : "";
       if (at) inline.push({ path: f.file, line: at.line, ...at.startLine ? { start_line: at.startLine } : {}, body: inlineBody(f) });
       else outside.push(f);
     }
-    const fixedNow = findings.filter((f) => f.status === "fixed" && f.commentId && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
+    const wasOpen = new Set(prev?.findings.filter((p) => p.status === "open").map((p) => p.fp));
+    const fixedNow = findings.filter((f) => f.status === "fixed" && wasOpen.has(f.fp));
     const warningText = [
       warning,
       skipped > 0 ? `${skipped} files did not fit in the review budget and were not reviewed.` : "",
       overCap > 0 ? `${overCap} more confirmed findings were over max_findings (${config.review.max_findings}) and are not shown.` : "",
       failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : ""
     ].filter(Boolean).join(" ");
+    const modelLabel = verifyModel === model ? model : `${model} (verify: ${verifyModel})`;
     const run2 = {
       repo,
       head: pr.head.sha,
-      model: verifyModel === model ? model : `${model} (verify: ${verifyModel})`,
+      model: modelLabel,
       files: diffs.length,
       candidates,
       verified,
@@ -17071,56 +17195,63 @@ ${text}` : "";
       ...warningText ? { warning: warningText } : {}
     };
     const usage = verify === find ? find.usage : { calls: find.usage.calls + verify.usage.calls, prompt: find.usage.prompt + verify.usage.prompt, completion: find.usage.completion + verify.usage.completion };
-    log(`score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed; ${usage.calls} calls, ${usage.prompt} in / ${usage.completion} out tokens`);
+    log.line(`Score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed. ${usage.calls} model calls, ${usage.prompt.toLocaleString("en")} in / ${usage.completion.toLocaleString("en")} out tokens.`);
     if (dryRun) {
-      for (const c of inline) log(`
+      for (const c of inline) log.line(`
 --- inline ${c.path}:${c.start_line ? `${c.start_line}-` : ""}${c.line}
 ${c.body}`);
-      log(`
+      log.line(`
 --- summary
 ${summaryBody(state, prev, outside, run2)}`);
       return;
     }
-    let inlinePosted = false;
-    if (inline.length) {
-      try {
-        await gh.review(number2, pr.head.sha, inline);
-        inlinePosted = true;
-      } catch (e) {
-        if (e instanceof Error && "keepSummary" in e) throw e;
-        log(`Inline review failed, moving findings to the summary: ${String(e)}`);
-        outside.push(...fresh.filter((f) => !outside.includes(f)));
+    await log.phase("Post", async () => {
+      if (inline.length) {
+        const posted = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
+          log.warn(`Inline review failed, findings go to the summary instead: ${String(e)}`);
+          return false;
+        });
+        if (posted) {
+          const comments = await gh.reviewComments(number2).catch(() => []);
+          for (const f of fresh) {
+            const id = comments.findLast((c) => !c.in_reply_to_id && ours(c.user?.login) && lastMarker(c.body, FINDING_TAG) === f.fp)?.id;
+            if (id !== void 0) f.commentId = id;
+          }
+        } else {
+          outside.push(...fresh.filter((f) => !outside.includes(f)));
+        }
       }
-      const posted = await gh.reviewComments(number2);
-      for (const f of fresh) {
-        const c = posted.find((p) => ours(p.user?.login) && p.body.match(FINDING_TAG)?.[1] === f.fp && !p.in_reply_to_id);
-        if (c) f.commentId = c.id;
+      const body = summaryBody(state, prev, outside, run2);
+      const saved = summaryId !== void 0 && await gh.editComment(summaryId, body).then(() => true, () => false);
+      if (!saved) summaryId = (await gh.comment(number2, body)).id;
+      for (const old of summaries) {
+        if (old.id !== summaryId) await gh.retire(old).catch((e) => log.warn(`Could not retire summary ${old.id}: ${String(e)}`));
       }
-    }
-    const body = summaryBody(state, prev, outside, run2);
-    const target = summaryId;
-    if (target) await gh.editComment(target, body).catch(() => gh.editComment(target, body)).catch((e) => {
-      if (inlinePosted) throw Object.assign(new Error(`summary not saved: ${String(e)}`), { keepSummary: true });
-      throw e;
+      await pool(fixedNow, 2, async (f) => {
+        if (f.commentId !== void 0) {
+          await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e) => log.warn(`Reply on ${f.fp} failed: ${String(e)}`));
+        }
+        const t = threadOf(f);
+        if (t && !t.resolved) await gh.close(t).catch((e) => log.warn(`Closing ${f.fp} failed: ${String(e)}`));
+      });
     });
-    else await gh.comment(number2, body);
-    if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${body}
-`);
-    for (const f of fixedNow) {
-      if (!f.commentId) continue;
-      await gh.reply(number2, f.commentId, `Fixed in ${pr.head.sha.slice(0, 7)}.`).catch((e) => log(`Reply on ${f.fp} failed: ${String(e)}`));
-      const thread = threads.find((t) => fpOf(t) === f.fp && !t.resolved);
-      if (thread) await gh.close(thread).catch((e) => log(`Closing ${f.fp} failed: ${String(e)}`));
-      await new Promise((r) => setTimeout(r, 1500));
-    }
+    await log.report({
+      score: state.score,
+      findings: { new: fresh.length, open: open.length, fixed: fixedNow.length },
+      candidates,
+      verified,
+      usage,
+      model: modelLabel
+    });
   } catch (e) {
-    if (e instanceof Error && "keepSummary" in e) throw e;
-    if (!dryRun && summaryId) {
+    if (!dryRun && summaryId !== void 0) {
       const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-      const body = (existing?.id === summaryId ? existing?.body : void 0) ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
+      const restore = existing?.id === summaryId ? existing.body : void 0;
+      const body = restore ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
 
 See the [workflow run](${runUrl}). Comment \`/review\` to retry.
-${SUMMARY_TAG}`;
+${SUMMARY_TAG}${prev ? `
+${writeState(prev)}` : ""}`;
       await gh.editComment(summaryId, body).catch(() => void 0);
     }
     throw e;

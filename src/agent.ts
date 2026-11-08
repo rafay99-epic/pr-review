@@ -43,7 +43,7 @@ export async function runAgent<T>(opts: {
       });
     }
     // Once out of budget, only the submit tool is offered and the call is forced.
-    const reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : undefined);
+    const reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : undefined, opts.deadline);
     messages.push(reply);
 
     const calls = reply.tool_calls ?? [];
