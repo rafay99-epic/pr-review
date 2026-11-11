@@ -11,8 +11,9 @@ kill_timeout = 150
 
 [env]
   DATA_DIR = "/data"
-  # Comma-separated owner/repo list the server reviews; empty means every installed repo.
-  REPOS = "rafay99-epic/Lumo"
+  # Optional comma-separated owner/repo allowlist. Empty: every repo the App is installed on,
+  # so installing the App is how a repo gets ReviewPilot.
+  REPOS = ""
 
 [http_service]
   internal_port = 8080
