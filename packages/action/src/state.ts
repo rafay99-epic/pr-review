@@ -125,6 +125,8 @@ export function writeState(full: State): string {
     out = encode([...kept, ...closed]);
   }
   while (out.length > STATE_BUDGET && kept.length) {
+    // `open` is oldest first (new findings are appended), so slicing off the front drops
+    // the oldest tenth and keeps the newest.
     kept = kept.slice(Math.ceil(kept.length / 10));
     out = encode(kept);
   }
