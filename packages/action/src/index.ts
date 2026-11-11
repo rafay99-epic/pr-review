@@ -327,7 +327,7 @@ async function main() {
       head: pr.head.sha,
       model: modelLabel,
       files: diffs.length,
-      reviewed: scope.length,
+      reviewed: reviewed.length,
       candidates,
       verified,
       seconds: Math.round(elapsed / 1000),

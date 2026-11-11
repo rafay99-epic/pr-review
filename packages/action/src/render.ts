@@ -39,7 +39,7 @@ export type Run = {
   head: string;
   model: string;
   files: number;
-  /** Files the find pass read; the rest had the same diff as at the last review. */
+  /** Files the find agents checked; the rest were unchanged since the last review, or are retried next run. */
   reviewed: number;
   candidates: number;
   verified: number;
@@ -88,7 +88,7 @@ export function checkResult(state: State, run: Run, summaryUrl: string, partial:
         ...(run.warning ? ["", `> ${run.warning}`] : []),
         ...(open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : []),
         "",
-        `${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files changed since last review`} · ${run.candidates} candidates, ${run.verified} checks · ${duration(run.seconds)} (${run.timing}) · ${tokens(run.tokens)}`,
+        `${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files read`} · ${run.candidates} candidates, ${run.verified} checks · ${duration(run.seconds)} (${run.timing}) · ${tokens(run.tokens)}`,
       ].join("\n"),
       annotations,
     },
@@ -129,7 +129,7 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
 
   lines.push(
     "",
-    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files changed since last review`} · ${run.candidates} candidates, ${run.verified} checks · ${duration(run.seconds)} (${run.timing}) · ${tokens(run.tokens)}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files read`} · ${run.candidates} candidates, ${run.verified} checks · ${duration(run.seconds)} (${run.timing}) · ${tokens(run.tokens)}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state),
   );

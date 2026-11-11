@@ -11,6 +11,8 @@ export type Job = {
   payload: unknown;
   /** Pushes wait for the debounce; `/review` starts right away. */
   debounce: boolean;
+  /** Retries so far after a failure before the review started (GitHub hiccups). */
+  attempt?: number;
 };
 
 /** A started review: `done` settles when it exits, `stop` asks it to exit early. */

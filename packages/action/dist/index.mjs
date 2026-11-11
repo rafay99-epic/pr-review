@@ -16640,7 +16640,7 @@ function checkResult(state, run2, summaryUrl, partial) {
         ...run2.warning ? ["", `> ${run2.warning}`] : [],
         ...open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : [],
         "",
-        `${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files changed since last review`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}`
+        `${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files read`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}`
       ].join("\n"),
       annotations
     }
@@ -16676,7 +16676,7 @@ function summaryBody(state, prev, outside, run2) {
   if (run2.warning) lines.push("", `> ${run2.warning}`);
   lines.push(
     "",
-    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files changed since last review`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files read`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state)
   );
@@ -17390,7 +17390,7 @@ ${text}` : "";
       head: pr.head.sha,
       model: modelLabel,
       files: diffs.length,
-      reviewed: scope2.length,
+      reviewed: reviewed.length,
       candidates,
       verified,
       seconds: Math.round(elapsed / 1e3),

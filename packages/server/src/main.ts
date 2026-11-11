@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { type } from "arktype";
 import { createApp } from "./github-app.ts";
 import { createQueue, type Job, keyOf, type Run } from "./queue.ts";
-import { toJob, verify } from "./webhook.ts";
+import { allowedRepo, toJob, verify } from "./webhook.ts";
 
 const exec = promisify(execFile);
 
@@ -38,6 +38,10 @@ const KILL_AFTER_MS = 2 * 60_000;
 /** Shutdown waits this long for reviews to exit; fly.toml's kill_timeout must be longer. */
 const DRAIN_MS = KILL_AFTER_MS + 10_000;
 const MAX_BODY = 25 * 1024 * 1024;
+/** A first clone that takes longer than this is abandoned; the next run starts it over. */
+const CLONE_TIMEOUT_MS = 10 * 60_000;
+/** Retries for a review that failed before it started, such as a GitHub outage. */
+const MAX_ATTEMPTS = 2;
 
 const SavedJob = type({
   repo: "string",
@@ -46,48 +50,66 @@ const SavedJob = type({
   event: "'pull_request' | 'issue_comment'",
   payload: "unknown",
   debounce: "boolean",
+  "attempt?": "number",
 });
 
 const slug = (key: string) => key.replace(/[^A-Za-z0-9._-]/g, "_");
 const jobFile = (key: string) => join(DATA, "jobs", `${slug(key)}.json`);
 const say = (key: string, text: string) => console.log(`[${key}] ${text}`);
 
-/** Runs one review: a fresh token, the clone (made once, reused after), then the action. */
+// Git reads the token from the environment, so it is never written into the clone's config.
+// Git and the action get only this, never the App key or webhook secret.
+const gitEnv = (token: string) => ({
+  PATH: process.env.PATH,
+  HOME: process.env.HOME,
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+  GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
+});
+
+/** Runs one review: the clone (made once, reused after), then the action with a fresh token. */
 function run(job: Job): Run {
   const key = keyOf(job);
   let stopped = false;
+  let spawned = false;
+  // Stopping before the review starts also abandons a clone in progress.
+  const cloning = new AbortController();
   let stop = () => {
     stopped = true;
+    cloning.abort();
   };
 
   const done = (async () => {
     const started = Date.now();
-    const [token, login] = await Promise.all([app.token(job.installation), app.login()]);
-    // Git reads the token from the environment, so it is never written into the clone's config.
-    // Git and the action get only this, never the App key or webhook secret.
-    const gitEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-      GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
-    };
     const dir = join(DATA, "repos", slug(job.repo));
     if (!existsSync(join(dir, ".git"))) {
       say(key, "cloning");
+      // Cloned beside the final path and renamed when complete: a stopped or timed-out clone
+      // never leaves a half-made repo that later runs would reuse.
+      const partial = `${dir}.partial`;
+      await rm(partial, { recursive: true, force: true });
       await rm(dir, { recursive: true, force: true });
-      await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, dir], { env: gitEnv });
+      const token = await app.token(job.installation);
+      await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, partial], {
+        env: gitEnv(token),
+        signal: cloning.signal,
+        timeout: CLONE_TIMEOUT_MS,
+      });
+      await rename(partial, dir);
     }
+    // Minted after the clone, so the review gets the token's full hour (MAX_RUN_MS is below it).
+    const [token, login] = await Promise.all([app.token(job.installation), app.login()]);
     // A run killed mid-checkout can leave the lock behind; runs on one repo never overlap.
     await rm(join(dir, ".git", "index.lock"), { force: true });
     const eventPath = join(DATA, "events", `${slug(key)}.json`);
     await writeFile(eventPath, JSON.stringify(job.payload));
     if (stopped) return;
+    spawned = true;
     const child = spawn(process.execPath, [ACTION], {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        ...gitEnv,
+        ...gitEnv(token),
         GITHUB_REPOSITORY: job.repo,
         GITHUB_WORKSPACE: dir,
         GITHUB_EVENT_PATH: eventPath,
@@ -110,7 +132,17 @@ function run(job: Job): Run {
     clearTimeout(limit);
     say(key, `exited ${code} after ${Math.round((Date.now() - started) / 1000)}s`);
   })()
-    .catch((e: unknown) => say(key, `failed: ${e instanceof Error ? e.message : String(e)}`))
+    .catch((e: unknown) => {
+      say(key, `failed: ${e instanceof Error ? e.message : String(e)}`);
+      // A failure before the review started (token, clone, GitHub outage) spent nothing, so it
+      // is retried after the debounce. A review that started and failed is not, so a review
+      // that keeps failing cannot keep spending the model key; `/review` retries it.
+      const attempt = (job.attempt ?? 0) + 1;
+      if (!spawned && !stopped && attempt <= MAX_ATTEMPTS) {
+        say(key, `retrying (${attempt} of ${MAX_ATTEMPTS})`);
+        void enqueue({ ...job, attempt, debounce: true }).catch(() => undefined);
+      }
+    })
     // The file stays when a newer delivery for this PR rewrote it, or when a shutdown cut
     // the run short, so the job runs again after the restart.
     .finally(() => (shuttingDown || queue.pending(key) ? undefined : rm(jobFile(key), { force: true })));
@@ -171,7 +203,8 @@ async function start() {
     const saved = name.endsWith(".json")
       ? await readFile(file, "utf8").then((text) => SavedJob(JSON.parse(text)), () => undefined).catch(() => undefined)
       : undefined;
-    if (!saved || saved instanceof type.errors) {
+    // Same gate as a fresh delivery: REPOS may have narrowed since the job was saved.
+    if (!saved || saved instanceof type.errors || !allowedRepo(REPOS, saved.repo)) {
       await rm(file, { force: true });
       continue;
     }

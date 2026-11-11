@@ -211,7 +211,7 @@ test("the check passes only at 5/5 and annotates each open finding", () => {
   assert.equal(four.conclusion, "failure");
   assert.equal(four.output?.title, "3/5 · 2 open · 1m 15s");
   assert.deepEqual(four.output?.annotations?.map((a) => [a.start_line, a.annotation_level, a.message]), [[1, "failure", "b  x "], [2, "warning", "b  x "]]);
-  assert.match(four.output?.summary ?? "", /1 of 3 files changed since last review.*75% cached/);
+  assert.match(four.output?.summary ?? "", /1 of 3 files read.*75% cached/);
   const many = checkResult({ head: "h", score: 4, findings: Array.from({ length: 60 }, (_, i) => finding(i + 1, "minor")) }, run, "u", false);
   assert.equal(many.output?.annotations?.length, 50);
   assert.match(many.output?.summary ?? "", /10 more open findings/);

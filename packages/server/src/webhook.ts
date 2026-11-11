@@ -39,15 +39,18 @@ const MAINTAINERS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 const PR_ACTIONS = new Set(["opened", "reopened", "ready_for_review", "synchronize"]);
 
+/** Whether `repos` (lowercase `owner/repo` or `owner/*` entries, empty for all) covers a repo. */
+export function allowedRepo(repos: ReadonlySet<string>, repo: string): boolean {
+  const name = repo.toLowerCase();
+  return repos.size === 0 || repos.has(name) || repos.has(`${name.split("/")[0]}/*`);
+}
+
 /**
  * The job for a delivery, or undefined when it should not start a review. `repos` holds
  * lowercase `owner/repo` or `owner/*` entries; empty allows every installed repo.
  */
 export function toJob(event: string, payload: unknown, repos: ReadonlySet<string>): Job | undefined {
-  const allowed = (repo: string) => {
-    const name = repo.toLowerCase();
-    return repos.size === 0 || repos.has(name) || repos.has(`${name.split("/")[0]}/*`);
-  };
+  const allowed = (repo: string) => allowedRepo(repos, repo);
 
   if (event === "pull_request") {
     const e = PullRequestEvent(payload);
