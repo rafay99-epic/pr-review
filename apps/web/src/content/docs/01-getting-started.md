@@ -26,6 +26,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  checks: write        # the ReviewPilot check with the score and annotations
 jobs:
   review:
     # Comment-triggered runs get your secrets even on public repos, so only maintainers'
@@ -36,6 +37,11 @@ jobs:
         && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # One review per pull request at a time: a /review during a push review waits its turn.
+    # On the job, not the workflow, so skipped runs (other comments) never join the group.
+    concurrency:
+      group: reviewpilot-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
         with:
@@ -50,3 +56,5 @@ jobs:
 ReviewPilot reviews it on open and on every push. Comment `/review` to run it again.
 
 GitHub runs comment-triggered workflows only from the default branch, so `/review` starts working once this workflow is merged.
+
+Busy repo with long reviews or many pushes? [Run it as a server](#server) instead.

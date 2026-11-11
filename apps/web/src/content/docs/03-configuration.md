@@ -15,6 +15,7 @@ review:
   ignore: ["docs/**"]
   min_severity: minor
   max_findings: 20
+  scope: changed
 
 context_files: [AGENTS.md, CLAUDE.md]
 
@@ -38,6 +39,7 @@ rules:
 | `review.ignore` | glob list | lockfiles, build output, images | Added to the built-in list, never replacing it |
 | `review.min_severity` | `minor` `major` `critical` | `minor` | Findings below it are not posted |
 | `review.max_findings` | 1 to 50 | `20` | New findings posted per run, most severe first |
+| `review.scope` | `changed` `all` | `changed` | On a push, `changed` reads only the files whose diff changed since the last review; `all` reads the whole pull request every time. `/review` always reads everything |
 | `context_files` | path list | `[AGENTS.md, CLAUDE.md]` | Read as repository guidance, up to 10,000 characters in total across all files |
 | `instructions` | string | none | Extra guidance for every review |
 | `rules[].id` | string | required | Cited on findings that break the rule |

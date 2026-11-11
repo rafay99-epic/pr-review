@@ -9,7 +9,7 @@ import type { Config, Rule } from "./config.ts";
 import type { FileDiff } from "./diff.ts";
 import type { Llm, ToolSpec } from "./llm.ts";
 import { bySeverity } from "./render.ts";
-import { type Finding, SEVERITIES, type Severity, type Tracked } from "./state.ts";
+import { diffHash, type Finding, SEVERITIES, type Severity, type Tracked } from "./state.ts";
 import { inside } from "./tools.ts";
 
 const Severity = type.enumerated(...SEVERITIES);
@@ -49,7 +49,10 @@ function toolSpec(name: string, description: string, schema: type.Any): ToolSpec
   return { type: "function", function: { name, description, parameters } };
 }
 
-function submitFindings(changed: readonly string[]): Submit<Finding[]> {
+/** A find agent's answer: its candidates, and the files it says it checked. */
+type FindResult = { findings: Finding[]; checked: Set<string> };
+
+function submitFindings(changed: readonly string[]): Submit<FindResult> {
   return {
     spec: toolSpec("submit_findings", "Submit the review. Call once, after checking every changed file.", Findings),
     parse(args, final) {
@@ -61,7 +64,11 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
       if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,
-        value: out.findings.map((c) => ({
+        value: {
+          // A forced answer means the agent ran out of budget, so its list is not trusted:
+          // none of the part's files count as reviewed and the next push reads them again.
+          checked: final ? new Set<string>() : checked,
+          findings: out.findings.map((c) => ({
           file: c.file.replace(/^\.\//, ""),
           line: c.line,
           endLine: Math.max(c.line, c.end_line ?? c.line),
@@ -70,7 +77,8 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
           body: c.body.trim(),
           evidence: c.evidence,
           ...(c.rule ? { rule: c.rule } : {}),
-        })),
+          })),
+        },
       };
     },
   };
@@ -167,10 +175,41 @@ export function chunk(diffs: readonly FileDiff[], size: number): FileDiff[][] {
   return parts;
 }
 
+/**
+ * The files the find pass reads: those whose diff changed since the last review (`seen` maps
+ * path to diffHash). With no record, every file is read.
+ */
+export const focus = (diffs: readonly FileDiff[], seen: Readonly<Record<string, string>> | undefined) =>
+  seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
+
+/**
+ * Whether an earlier finding needs the verifier again: only when its file, or a file its
+ * evidence cites, is among the changed files. Otherwise its last verdict stands.
+ */
+export function stale(f: Pick<Finding, "file" | "evidence">, changed: ReadonlySet<string>): boolean {
+  // Evidence is model text ("path:line: code" by request), so every path-like token in it is
+  // compared by whole segments: `b.ts` matches `src/b.ts`, `a.ts` never matches `a.tsx`.
+  const cited = [f.file, ...f.evidence.flatMap((e) => e.match(PATH_TOKEN) ?? [])].map((p) => p.replace(/^\.\//, ""));
+  return cited.some((c) => [...changed].some((p) => c === p || p.endsWith(`/${c}`) || c.endsWith(`/${p}`)));
+}
+
+const PATH_TOKEN = /[\w@.-]+(?:\/[\w@.-]+)*\.\w+/g;
+
 /** Diff characters per find agent. Smaller parts mean shorter contexts and closer reading. */
 const CHUNK_CHARS = 25_000;
 /** Candidates sent to verification, most severe first. */
 const MAX_VERIFY = 25;
+/** Agents running at once in each pass. Model calls are network-bound, so this sets the wall time. */
+const FIND_AGENTS = 6;
+const VERIFY_AGENTS = 8;
+/**
+ * Time each agent gets before it must submit. The defaults fit a workflow's job timeout; the
+ * server has no such cap and gives more (REVIEWPILOT_FIND_SECONDS, REVIEWPILOT_VERIFY_SECONDS),
+ * so a slow provider does not cost whole parts of the diff.
+ */
+const seconds = (name: string, fallback: number) => (Number(process.env[name]) || fallback) * 1000;
+const FIND_MS = seconds("REVIEWPILOT_FIND_SECONDS", 240);
+const VERIFY_MS = seconds("REVIEWPILOT_VERIFY_SECONDS", 180);
 
 export type ReviewInput = {
   find: Llm;
@@ -181,6 +220,8 @@ export type ReviewInput = {
   guidance: string;
   pr: { title: string; body: string };
   diffs: readonly FileDiff[];
+  /** The part of `diffs` the find pass reads (see focus); earlier findings are re-checked against all of `diffs`. */
+  scope: readonly FileDiff[];
   /** Findings from earlier runs: open ones are re-checked, dismissed ones are not raised again. */
   previous: readonly Tracked[];
   log: (line: string) => void;
@@ -191,9 +232,9 @@ export type Checked = { finding: Finding; verdict?: VerdictResult; previous?: Tr
 
 export async function review(
   input: ReviewInput,
-): Promise<{ checked: Checked[]; candidates: number; verified: number; failedParts: number; parts: number }> {
+): Promise<{ checked: Checked[]; candidates: number; verified: number; failedParts: number; parts: number; reviewed: string[]; findMs: number; verifyMs: number }> {
   const { config, diffs, previous, log } = input;
-  const changed = diffs.filter((d) => d.status !== "deleted").map((d) => d.path);
+  const changed = input.scope.filter((d) => d.status !== "deleted").map((d) => d.path);
   const open = previous.filter((p) => p.status === "open");
   const dismissed = previous.filter((p) => p.status === "dismissed");
 
@@ -206,10 +247,11 @@ export async function review(
   ].filter(Boolean);
 
   const all = diffs.map((d) => `- ${d.path} (${d.status})`).join("\n");
-  const chunks = chunk(diffs, CHUNK_CHARS);
-  log(`find: ${changed.length} files in ${chunks.length} parts`);
+  const chunks = chunk(input.scope, CHUNK_CHARS);
+  log(`find: ${changed.length} of ${diffs.length} files in ${chunks.length} parts`);
 
-  const parts = await pool(chunks, 3, async (part, i) => {
+  const findStart = Date.now();
+  const parts = await pool(chunks, FIND_AGENTS, async (part, i) => {
     const mine = part.filter((d) => d.status !== "deleted").map((d) => d.path);
     const user = [
       `PR title: ${input.pr.title}`,
@@ -227,18 +269,25 @@ export async function review(
       user,
       submit: submitFindings(mine),
       maxTurns: 12,
-      deadline: Date.now() + 4 * 60_000,
+      deadline: Date.now() + FIND_MS,
       log: (line) => log(`[part ${i + 1}] ${line}`),
     }).catch((e: unknown) => {
       log(`[part ${i + 1}] find failed: ${e instanceof Error ? e.message : String(e)}`);
       return undefined;
     });
   });
+  const findMs = Date.now() - findStart;
   const failedParts = parts.filter((p) => p === undefined).length;
+  // Files the agents checked. A failed part's files, and any a part ran out of budget on,
+  // are read again on the next run.
+  const reviewed = chunks.flatMap((part, i) => {
+    const p = parts[i];
+    return p ? part.filter((d) => p.checked.has(d.path)).map((d) => d.path) : [];
+  });
   // A candidate must point at a file that exists in the checkout (a model steered by the PR
   // could otherwise put arbitrary text in a link), and may only cite rules that exist.
   const ruleIds = new Set(input.rules.map((r) => r.id));
-  const candidates = parts.flatMap((p) => p ?? []);
+  const candidates = parts.flatMap((p) => p?.findings ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input.root, c.file).then(Boolean)));
   const found = candidates
     .filter((_, i) => exists[i])
@@ -247,16 +296,21 @@ export async function review(
   if (found.length < candidates.length) log(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
   log(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
 
+  // An earlier finding is re-checked only when its file is in the PR's diff (without it the
+  // verifier cannot tell, and a rejection would wrongly mark it fixed) and its code changed.
+  const changedPaths = new Set(input.scope.map((d) => d.path));
+  const recheck = open.filter((p) => diffs.some((d) => d.path === p.file));
+  const due = recheck.filter((p) => stale(p, changedPaths));
+  if (due.length < recheck.length) log(`verify: ${recheck.length - due.length} earlier findings kept as they were, their code did not change`);
   const jobs: { finding: Finding; previous?: Tracked }[] = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
-    // An earlier finding is re-checked only when its file is in the reviewed diff. Without
-    // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
-    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p })),
+    ...due.map((p) => ({ finding: p, previous: p })),
   ];
 
   const patchOf = (file: string) =>
     diffs.find((d) => d.path === file)?.numbered ?? "(This file is not changed in the PR. Open it with read_file, and check what in the diff it depends on.)";
-  const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
+  const verifyStart = Date.now();
+  const checked = await pool(jobs, VERIFY_AGENTS, async ({ finding, previous: prev }) => {
     const verdict = await runAgent({
       llm: input.verify,
       root: input.root,
@@ -276,7 +330,7 @@ export async function review(
         .join("\n\n"),
       submit: submitVerdict,
       maxTurns: 12,
-      deadline: Date.now() + 3 * 60_000,
+      deadline: Date.now() + VERIFY_MS,
       log: () => {},
     }).catch((e: unknown) => {
       log(`verify error: ${finding.file}:${finding.line} ${e instanceof Error ? e.message : String(e)}`);
@@ -286,7 +340,7 @@ export async function review(
     return { finding, ...(verdict ? { verdict } : {}), ...(prev ? { previous: prev } : {}) };
   });
 
-  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed, findMs, verifyMs: Date.now() - verifyStart };
 }
 
 const Groups = type({ duplicates: "string[][]" });

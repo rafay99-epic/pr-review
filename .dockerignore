@@ -1,0 +1,7 @@
+**/node_modules
+**/.turbo
+.git
+apps
+bench
+assets
+packages/server/dist

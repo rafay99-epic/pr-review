@@ -5,7 +5,7 @@ summary: Find, verify, post. Nothing reaches the PR without proof.
 
 ## Find
 
-The diff is split into parts of about 25,000 characters. Each part goes to its own agent, and up to three run at once. Every agent has three read-only tools:
+The diff is split into parts of about 25,000 characters. Each part goes to its own agent, and up to six run at once. Every agent has three read-only tools:
 
 | Tool | What it does |
 | --- | --- |
@@ -14,6 +14,8 @@ The diff is split into parts of about 25,000 characters. Each part goes to its o
 | `list_dir` | Lists a directory |
 
 The agent opens callers, types and guards as it needs them, then submits every specific suspicion. It must list each changed file it checked; a submission that skips one is sent back.
+
+On a push, only the files whose diff changed since the last review go to the find pass; the rest were already read. A file the agent did not get to is read again next time. `/review` always reads every file, and `review.scope: all` in the config makes every push do the same.
 
 ## Verify
 
@@ -24,11 +26,13 @@ Each candidate goes to a fresh agent that assumes it is wrong. It confirms only 
 3. Nothing already prevents it: no guard, early return, validation or type constraint.
 4. The pull request introduced it.
 
-Claims about tool versions or platform behaviour count only when the repository itself shows them. Up to four verifications run at once.
+Claims about tool versions or platform behaviour count only when the repository itself shows them. Up to eight verifications run at once.
 
 ## Post
 
 Confirmed findings become inline comments on the changed lines. One summary comment holds the score, the findings table and what changed since the last push.
+
+The **ReviewPilot** check shows the review in the pull request's checks. It is in progress while the review runs, with the elapsed time. It then passes at 5/5 and fails below (a partial review that skipped code is neutral, never green), with the score in its title and up to 50 open findings as annotations on their lines, so findings also show in Files changed and the Checks tab. The check needs Checks write on the token; without it the review still posts.
 
 ## Safety
 

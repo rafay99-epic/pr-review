@@ -18,8 +18,16 @@ const Pr = type({
 });
 
 const IssueComment = type({ id: "number", node_id: "string", body: "string", user: User.or("null") });
-const ReviewComment = type({ id: "number", body: "string", "in_reply_to_id?": "number", user: User.or("null") });
+const ReviewComment = type({
+  id: "number",
+  body: "string",
+  "in_reply_to_id?": "number",
+  /** The commit the comment was made on; unlike commit_id it does not move when the line goes stale. */
+  "original_commit_id?": "string",
+  user: User.or("null"),
+});
 const Created = type({ id: "number" });
+const CheckRuns = type({ check_runs: type({ id: "number", started_at: "string | null" }).array() });
 const GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 
 const ThreadsData = type({
@@ -60,6 +68,18 @@ export type Thread = {
 };
 
 export type InlineComment = { path: string; line: number; start_line?: number; body: string };
+
+/** One finding shown on its lines in the check's annotations (Files changed and the Checks tab). */
+export type Annotation = { path: string; start_line: number; end_line: number; annotation_level: "failure" | "warning"; title: string; message: string };
+
+export type CheckUpdate = {
+  status?: "in_progress" | "completed";
+  conclusion?: "success" | "failure" | "neutral" | "cancelled";
+  started_at?: string;
+  completed_at?: string;
+  details_url?: string;
+  output?: { title: string; summary: string; annotations?: Annotation[] };
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -138,6 +158,12 @@ export function createGitHub(token: string, repo: string) {
     reviewComments: (n: number) => all(ReviewComment, `${r}/pulls/${n}/comments`),
     comment: (n: number, body: string) => call(Created, "POST", `${r}/issues/${n}/comments`, { body }),
     editComment: (id: number, body: string) => call(Created, "PATCH", `${r}/issues/comments/${id}`, { body }),
+    /** The ReviewPilot check on a commit. Needs Checks write on the token. */
+    createCheck: (head: string, body: CheckUpdate) => call(Created, "POST", `${r}/check-runs`, { name: "ReviewPilot", head_sha: head, ...body }),
+    updateCheck: (id: number, body: CheckUpdate) => call(Created, "PATCH", `${r}/check-runs/${id}`, body),
+    /** ReviewPilot checks on a commit that are still in progress, with when they started. */
+    runningChecks: async (head: string) =>
+      (await call(CheckRuns, "GET", `${r}/commits/${head}/check-runs?check_name=ReviewPilot&status=in_progress&per_page=100`)).check_runs,
     react: (commentId: number, content: "eyes" | "+1") => call(done, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
     reply: (n: number, commentId: number, body: string) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
     review: (n: number, commitId: string, comments: InlineComment[]) =>

@@ -4,6 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { type } from "arktype";
+import type { ReviewComment } from "./github.ts";
 
 export const SEVERITIES = ["critical", "major", "minor"] as const;
 export type Severity = (typeof SEVERITIES)[number];
@@ -27,8 +28,16 @@ const TrackedSchema = FindingSchema.and({
   "commentId?": "number",
 });
 
-/** The state stored in the summary comment. It is read back as untrusted input. */
-const StateSchema = type({ head: "string", score: "1 | 2 | 3 | 4 | 5", findings: TrackedSchema.array() });
+/**
+ * The state stored in the summary comment. It is read back as untrusted input. `files` maps
+ * each reviewed path to the diffHash it had then, so a push only re-reads what changed.
+ */
+const StateSchema = type({
+  head: "string",
+  score: "1 | 2 | 3 | 4 | 5",
+  findings: TrackedSchema.array(),
+  "files?": "Record<string, string>",
+});
 
 export type Finding = typeof FindingSchema.infer;
 export type Tracked = typeof TrackedSchema.infer;
@@ -53,6 +62,9 @@ export function fingerprint(f: Pick<Finding, "file" | "title">): string {
   return createHash("sha1").update(`${f.file}\n${title}`).digest("hex").slice(0, 12);
 }
 
+/** Hash of one file's PR diff: unchanged across pushes means nothing new to find in it. */
+export const diffHash = (numbered: string) => createHash("sha1").update(numbered).digest("hex").slice(0, 12);
+
 /** A new finding within two lines of an earlier one in the same file is treated as the same finding. */
 export function sameIssue(a: Pick<Finding, "file" | "line">, b: Pick<Finding, "file" | "line">): boolean {
   return a.file === b.file && Math.abs(a.line - b.line) <= 2;
@@ -74,6 +86,9 @@ export function readState(body: string): State | undefined {
   }
 }
 
+/** JSON characters the reviewed-file hashes may take, about 300 files. */
+const FILES_BUDGET = 20_000;
+
 /** Encoded state never exceeds this, leaving room for the markdown in a 65,536-character comment. */
 export const STATE_BUDGET = 48_000;
 
@@ -82,7 +97,11 @@ export const STATE_BUDGET = 48_000;
  * 100); open ones are trimmed in steps (evidence, then bodies, then the oldest closed) until
  * it fits, so a long-lived PR can never push the summary past GitHub's comment limit.
  */
-export function writeState(state: State): string {
+export function writeState(full: State): string {
+  // Past FILES_BUDGET the hashes are dropped: the next push re-reads every file, and the
+  // findings keep the room.
+  const { files, ...rest } = full;
+  const state = files && JSON.stringify(files).length <= FILES_BUDGET ? { ...rest, files } : rest;
   const open = state.findings.filter((f) => f.status === "open");
   let closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
   const steps = [
@@ -106,6 +125,8 @@ export function writeState(state: State): string {
     out = encode([...kept, ...closed]);
   }
   while (out.length > STATE_BUDGET && kept.length) {
+    // `open` is oldest first (new findings are appended), so slicing off the front drops
+    // the oldest tenth and keeps the newest.
     kept = kept.slice(Math.ceil(kept.length / 10));
     out = encode(kept);
   }
@@ -115,3 +136,17 @@ export function writeState(state: State): string {
 export const SUMMARY_TAG = "<!-- reviewpilot:summary -->";
 export const findingTag = (fp: string) => `<!-- reviewpilot:fp=${fp} -->`;
 export const FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/g;
+
+/**
+ * Finding fingerprint to comment id, for findings ReviewPilot already posted inline on this
+ * head commit. A run killed mid-post leaves some; the next run reuses them instead of posting
+ * again. Replies, other authors and comments on older commits never count.
+ */
+export function postedOnHead(comments: readonly ReviewComment[], head: string, ours: (login: string | undefined) => boolean) {
+  const posted = new Map<string, number>();
+  for (const c of comments) {
+    const fp = lastMarker(c.body, FINDING_TAG);
+    if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === head) posted.set(fp, c.id);
+  }
+  return posted;
+}

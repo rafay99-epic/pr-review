@@ -599,8 +599,8 @@ var require_Node = __commonJS({
         };
         const res = toJS.toJS(this, "", ctx);
         if (typeof onAnchor === "function")
-          for (const { count, res: res2 } of ctx.anchors.values())
-            onAnchor(res2, count);
+          for (const { count: count2, res: res2 } of ctx.anchors.values())
+            onAnchor(res2, count2);
         return typeof reviver === "function" ? applyReviver.applyReviver(reviver, { "": res }, "", res) : res;
       }
     };
@@ -708,13 +708,13 @@ var require_Alias = __commonJS({
         const anchor2 = anchors2 && source && anchors2.get(source);
         return anchor2 ? anchor2.count * anchor2.aliasCount : 0;
       } else if (identity.isCollection(node2)) {
-        let count = 0;
+        let count2 = 0;
         for (const item of node2.items) {
           const c = getAliasCount(doc, item, anchors2);
-          if (c > count)
-            count = c;
+          if (c > count2)
+            count2 = c;
         }
-        return count;
+        return count2;
       } else if (identity.isPair(node2)) {
         const kc = getAliasCount(doc, node2.key, anchors2);
         const vc = getAliasCount(doc, node2.value, anchors2);
@@ -3667,8 +3667,8 @@ var require_Document = __commonJS({
         };
         const res = toJS.toJS(this.contents, jsonArg ?? "", ctx);
         if (typeof onAnchor === "function")
-          for (const { count, res: res2 } of ctx.anchors.values())
-            onAnchor(res2, count);
+          for (const { count: count2, res: res2 } of ctx.anchors.values())
+            onAnchor(res2, count2);
         return typeof reviver === "function" ? applyReviver.applyReviver(reviver, { "": res }, "", res) : res;
       }
       /**
@@ -3745,12 +3745,12 @@ var require_errors = __commonJS({
         lineStr = prev + lineStr;
       }
       if (/[^ ]/.test(lineStr)) {
-        let count = 1;
+        let count2 = 1;
         const end = error.linePos[1];
         if (end?.line === line && end.col > col) {
-          count = Math.max(1, Math.min(end.col - col, 80 - ci));
+          count2 = Math.max(1, Math.min(end.col - col, 80 - ci));
         }
-        const pointer = " ".repeat(ci) + "^".repeat(count);
+        const pointer = " ".repeat(ci) + "^".repeat(count2);
         error.message += `:
 
 ${lineStr}
@@ -3769,7 +3769,7 @@ ${pointer}
 var require_resolve_props = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-props.js"(exports) {
     "use strict";
-    function resolveProps(tokens, { flow, indicator, next: next2, offset, onError, parentIndent, startOnNewline }) {
+    function resolveProps(tokens2, { flow, indicator, next: next2, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
       let atNewline = startOnNewline;
       let hasSpace = startOnNewline;
@@ -3784,7 +3784,7 @@ var require_resolve_props = __commonJS({
       let comma = null;
       let found = null;
       let start = null;
-      for (const token of tokens) {
+      for (const token of tokens2) {
         if (reqSpace) {
           if (token.type !== "space" && token.type !== "newline" && token.type !== "comma")
             onError(token.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
@@ -3875,7 +3875,7 @@ var require_resolve_props = __commonJS({
             hasSpace = false;
         }
       }
-      const last = tokens[tokens.length - 1];
+      const last = tokens2[tokens2.length - 1];
       const end = last ? last.offset + last.source.length : offset;
       if (reqSpace && next2 && next2.type !== "space" && next2.type !== "newline" && next2.type !== "comma" && (next2.type !== "scalar" || next2.source !== "")) {
         onError(next2.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
@@ -5215,8 +5215,8 @@ ${cb}` : comment;
        * @param forceDoc - If the stream contains no document, still emit a final document including any comments and directives that would be applied to a subsequent document.
        * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
        */
-      *compose(tokens, forceDoc = false, endOffset = -1) {
-        for (const token of tokens)
+      *compose(tokens2, forceDoc = false, endOffset = -1) {
+        for (const token of tokens2)
           yield* this.next(token);
         yield* this.end(forceDoc, endOffset);
       }
@@ -7962,16 +7962,16 @@ var describeCollapsibleDate = (date) => {
   const dayOfMonth = date.getDate();
   const hours = date.getHours();
   const minutes = date.getMinutes();
-  const seconds2 = date.getSeconds();
+  const seconds3 = date.getSeconds();
   const milliseconds = date.getMilliseconds();
-  if (month === 0 && dayOfMonth === 1 && hours === 0 && minutes === 0 && seconds2 === 0 && milliseconds === 0)
+  if (month === 0 && dayOfMonth === 1 && hours === 0 && minutes === 0 && seconds3 === 0 && milliseconds === 0)
     return `${year}`;
   const datePortion = `${months[month]} ${dayOfMonth}, ${year}`;
-  if (hours === 0 && minutes === 0 && seconds2 === 0 && milliseconds === 0)
+  if (hours === 0 && minutes === 0 && seconds3 === 0 && milliseconds === 0)
     return datePortion;
   const h = hours % 12 || 12;
   const suffix2 = hours < 12 ? " AM" : " PM";
-  let timePortion = seconds2 || milliseconds ? `${h}:${pad(minutes, 2)}:${pad(seconds2, 2)}` : `${h}:${pad(minutes, 2)}`;
+  let timePortion = seconds3 || milliseconds ? `${h}:${pad(minutes, 2)}:${pad(seconds3, 2)}` : `${h}:${pad(minutes, 2)}`;
   if (milliseconds)
     timePortion += `.${pad(milliseconds, 3)}`;
   return `${timePortion + suffix2}, ${datePortion}`;
@@ -8110,8 +8110,8 @@ var Scanner = class {
   jumpToIndex(i) {
     this.i = i < 0 ? this.length + i : i;
   }
-  jumpForward(count) {
-    this.i += count;
+  jumpForward(count2) {
+    this.i += count2;
   }
   get location() {
     return this.i;
@@ -8128,8 +8128,8 @@ var Scanner = class {
   lookaheadIs(char) {
     return this.lookahead === char;
   }
-  lookaheadIsIn(tokens) {
-    return this.lookahead in tokens;
+  lookaheadIsIn(tokens2) {
+    return this.lookahead in tokens2;
   }
 };
 var writeUnmatchedGroupCloseMessage = (char, unscanned) => `Unmatched ${char}${unscanned === "" ? "" : ` before ${unscanned}`}`;
@@ -14648,8 +14648,8 @@ var RuntimeState = class _RuntimeState {
   previousOperator() {
     return this.branches.leftBound?.comparator ?? this.branches.prefixes[this.branches.prefixes.length - 1] ?? (this.branches.intersection ? "&" : this.branches.union ? "|" : this.branches.pipe ? "|>" : void 0);
   }
-  shiftedBy(count) {
-    this.scanner.jumpForward(count);
+  shiftedBy(count2) {
+    this.scanner.jumpForward(count2);
     return this;
   }
 };
@@ -16006,7 +16006,12 @@ var TrackedSchema = FindingSchema.and({
   /** Review comment id of the inline comment, once posted. */
   "commentId?": "number"
 });
-var StateSchema = type({ head: "string", score: "1 | 2 | 3 | 4 | 5", findings: TrackedSchema.array() });
+var StateSchema = type({
+  head: "string",
+  score: "1 | 2 | 3 | 4 | 5",
+  findings: TrackedSchema.array(),
+  "files?": "Record<string, string>"
+});
 function score(findings) {
   const critical = findings.filter((f) => f.severity === "critical").length;
   if (critical >= 2) return 1;
@@ -16019,6 +16024,7 @@ function fingerprint(f) {
   return createHash("sha1").update(`${f.file}
 ${title}`).digest("hex").slice(0, 12);
 }
+var diffHash = (numbered) => createHash("sha1").update(numbered).digest("hex").slice(0, 12);
 function sameIssue(a, b) {
   return a.file === b.file && Math.abs(a.line - b.line) <= 2;
 }
@@ -16034,8 +16040,11 @@ function readState(body) {
     return void 0;
   }
 }
+var FILES_BUDGET = 2e4;
 var STATE_BUDGET = 48e3;
-function writeState(state) {
+function writeState(full) {
+  const { files, ...rest } = full;
+  const state = files && JSON.stringify(files).length <= FILES_BUDGET ? { ...rest, files } : rest;
   const open = state.findings.filter((f) => f.status === "open");
   let closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
   const steps = [
@@ -16065,6 +16074,14 @@ function writeState(state) {
 var SUMMARY_TAG = "<!-- reviewpilot:summary -->";
 var findingTag = (fp) => `<!-- reviewpilot:fp=${fp} -->`;
 var FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/g;
+function postedOnHead(comments, head, ours) {
+  const posted = /* @__PURE__ */ new Map();
+  for (const c of comments) {
+    const fp = lastMarker(c.body, FINDING_TAG);
+    if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === head) posted.set(fp, c.id);
+  }
+  return posted;
+}
 
 // src/config.ts
 var Severity = type.enumerated(...SEVERITIES);
@@ -16083,7 +16100,9 @@ var FileConfig = type({
   "review?": {
     "ignore?": "string[]",
     "min_severity?": Severity,
-    "max_findings?": "0 < number.integer <= 50"
+    "max_findings?": "0 < number.integer <= 50",
+    /** On a push: `changed` re-reads only files whose diff changed, `all` re-reads the whole PR. */
+    "scope?": "'changed' | 'all'"
   },
   "rules?": Rule.array(),
   "instructions?": "string",
@@ -16111,7 +16130,8 @@ var DEFAULTS = {
       "**/*.lottie"
     ],
     min_severity: "minor",
-    max_findings: 20
+    max_findings: 20,
+    scope: "changed"
   },
   rules: [],
   instructions: "",
@@ -16218,13 +16238,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var exec = promisify(execFile);
 var git = async (root, ...args2) => (await exec("git", args2, { cwd: root, maxBuffer: 256 * 1024 * 1024 })).stdout;
-async function checkoutPr(root, pr, head, baseSha) {
+async function checkoutPr(root, pr, head, base) {
   if ((await git(root, "rev-parse", "--is-shallow-repository")).trim() === "true") {
     await git(root, "fetch", "--no-tags", "--unshallow", "origin");
   }
   await git(root, "fetch", "--no-tags", "origin", `+refs/pull/${pr}/head:refs/reviewpilot/head`);
-  await git(root, "checkout", "--quiet", "--detach", head);
-  return (await git(root, "merge-base", baseSha, head)).trim();
+  await git(root, "fetch", "--no-tags", "origin", `+refs/heads/${base.ref}:refs/reviewpilot/base`).catch(() => void 0);
+  await git(root, "checkout", "--quiet", "--force", "--detach", head);
+  return (await git(root, "merge-base", base.sha, head)).trim();
 }
 var diff = (root, from, to, ignore) => git(
   root,
@@ -16263,8 +16284,16 @@ var Pr = type({
   base: { ref: "string", sha: "string", repo: { default_branch: "string" } }
 });
 var IssueComment = type({ id: "number", node_id: "string", body: "string", user: User.or("null") });
-var ReviewComment = type({ id: "number", body: "string", "in_reply_to_id?": "number", user: User.or("null") });
+var ReviewComment = type({
+  id: "number",
+  body: "string",
+  "in_reply_to_id?": "number",
+  /** The commit the comment was made on; unlike commit_id it does not move when the line goes stale. */
+  "original_commit_id?": "string",
+  user: User.or("null")
+});
 var Created = type({ id: "number" });
+var CheckRuns = type({ check_runs: type({ id: "number", started_at: "string | null" }).array() });
 var GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 var ThreadsData = type({
   data: {
@@ -16354,6 +16383,11 @@ function createGitHub(token, repo) {
     reviewComments: (n) => all(ReviewComment, `${r}/pulls/${n}/comments`),
     comment: (n, body) => call(Created, "POST", `${r}/issues/${n}/comments`, { body }),
     editComment: (id, body) => call(Created, "PATCH", `${r}/issues/comments/${id}`, { body }),
+    /** The ReviewPilot check on a commit. Needs Checks write on the token. */
+    createCheck: (head, body) => call(Created, "POST", `${r}/check-runs`, { name: "ReviewPilot", head_sha: head, ...body }),
+    updateCheck: (id, body) => call(Created, "PATCH", `${r}/check-runs/${id}`, body),
+    /** ReviewPilot checks on a commit that are still in progress, with when they started. */
+    runningChecks: async (head) => (await call(CheckRuns, "GET", `${r}/commits/${head}/check-runs?check_name=ReviewPilot&status=in_progress&per_page=100`)).check_runs,
     react: (commentId, content) => call(done, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
     reply: (n, commentId, body) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
     review: (n, commitId, comments) => call(Created, "POST", `${r}/pulls/${n}/reviews`, {
@@ -16419,12 +16453,17 @@ var Completion = type({
       "tool_calls?": type({ id: "string", type: "'function'", function: { name: "string", arguments: "string" } }).array()
     }
   }).array(),
-  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number" },
+  // Providers differ here: some send null for the details, so they are optional and nullable.
+  "usage?": {
+    "prompt_tokens?": "number",
+    "completion_tokens?": "number",
+    "prompt_tokens_details?": type({ "cached_tokens?": "number | null" }).or("null")
+  },
   "error?": { "message?": "string" }
 });
 var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 function createLlm(opts) {
-  const usage = { prompt: 0, completion: 0, calls: 0 };
+  const usage = { prompt: 0, completion: 0, calls: 0, cached: 0 };
   const url2 = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
   let sendEffort = opts.effort !== "none";
   async function chat(messages, tools, force, deadline) {
@@ -16491,6 +16530,7 @@ function createLlm(opts) {
       usage.calls += 1;
       usage.prompt += data.usage?.prompt_tokens ?? 0;
       usage.completion += data.usage?.completion_tokens ?? 0;
+      usage.cached += data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
       return {
         role: "assistant",
         content: message.content ?? null,
@@ -16543,7 +16583,7 @@ function createLog(actions) {
           rows,
           `| **Total** | **${seconds(total)}** |`,
           "",
-          `Model \`${facts.model}\`: ${facts.usage.calls} calls, ${facts.usage.prompt.toLocaleString("en")} input and ${facts.usage.completion.toLocaleString("en")} output tokens.`,
+          `Model \`${facts.model}\`: ${facts.usage.calls} calls, ${facts.usage.prompt.toLocaleString("en")} input (${facts.usage.cached.toLocaleString("en")} cached) and ${facts.usage.completion.toLocaleString("en")} output tokens.`,
           ""
         ].join("\n")
       );
@@ -16574,6 +16614,41 @@ ${fence(f.evidence.map(clean))}
     findingTag(f.fp)
   ].join("\n");
 }
+var duration = (s) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+var count = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+var tokens = (t) => {
+  if (!t.prompt) return "no model calls";
+  const share = Math.floor(t.cached / t.prompt * 100);
+  return `${count(t.prompt)} tokens in${share > 0 ? `, ${share}% cached` : ""}`;
+};
+function checkResult(state, run2, summaryUrl, partial) {
+  const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
+  const annotations = open.slice(0, 50).map((f) => ({
+    path: f.file,
+    // GitHub rejects the whole update for one bad annotation, so lines start at 1 and
+    // messages stay well under its 64 KB limit.
+    start_line: Math.max(1, f.line),
+    end_line: Math.max(1, f.line, f.endLine),
+    annotation_level: f.severity === "minor" ? "warning" : "failure",
+    title: `${f.severity}: ${flat(f.title)}`.slice(0, 255),
+    message: clean(f.body).slice(0, 4e3)
+  }));
+  return {
+    conclusion: state.score < 5 ? "failure" : partial ? "neutral" : "success",
+    details_url: summaryUrl,
+    output: {
+      title: `${state.score}/5${partial ? " (partial)" : ""} \xB7 ${open.length} open \xB7 ${duration(run2.seconds)}`,
+      summary: [
+        `**${state.score}/5** on ${run2.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        ...run2.warning ? ["", `> ${run2.warning}`] : [],
+        ...open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : [],
+        "",
+        `${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files read`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}`
+      ].join("\n"),
+      annotations
+    }
+  };
+}
 function summaryBody(state, prev, outside, run2) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const fixed = state.findings.filter((f) => f.status === "fixed" && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
@@ -16602,17 +16677,17 @@ function summaryBody(state, prev, outside, run2) {
     lines.push("\n</details>");
   }
   if (run2.warning) lines.push("", `> ${run2.warning}`);
-  const time = run2.seconds >= 60 ? `${Math.floor(run2.seconds / 60)}m ${run2.seconds % 60}s` : `${run2.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.files} files \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files read`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state)
   );
   return lines.join("\n");
 }
+var PROGRESS = "## ReviewPilot: reviewing";
 var progressBody = (head, prev) => [
-  `## ReviewPilot: reviewing ${head.slice(0, 7)}`,
+  `${PROGRESS} ${head.slice(0, 7)}`,
   "",
   "Reading the diff and the code around it, then re-checking each finding. This usually takes a few minutes.",
   SUMMARY_TAG,
@@ -16835,16 +16910,21 @@ function submitFindings(changed) {
       if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,
-        value: out.findings.map((c) => ({
-          file: c.file.replace(/^\.\//, ""),
-          line: c.line,
-          endLine: Math.max(c.line, c.end_line ?? c.line),
-          severity: c.severity,
-          title: c.title.trim(),
-          body: c.body.trim(),
-          evidence: c.evidence,
-          ...c.rule ? { rule: c.rule } : {}
-        }))
+        value: {
+          // A forced answer means the agent ran out of budget, so its list is not trusted:
+          // none of the part's files count as reviewed and the next push reads them again.
+          checked: final ? /* @__PURE__ */ new Set() : checked,
+          findings: out.findings.map((c) => ({
+            file: c.file.replace(/^\.\//, ""),
+            line: c.line,
+            endLine: Math.max(c.line, c.end_line ?? c.line),
+            severity: c.severity,
+            title: c.title.trim(),
+            body: c.body.trim(),
+            evidence: c.evidence,
+            ...c.rule ? { rule: c.rule } : {}
+          }))
+        }
       };
     }
   };
@@ -16933,11 +17013,22 @@ function chunk(diffs, size) {
   if (current.length) parts.push(current);
   return parts;
 }
+var focus = (diffs, seen) => seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
+function stale(f, changed) {
+  const cited = [f.file, ...f.evidence.flatMap((e) => e.match(PATH_TOKEN) ?? [])].map((p) => p.replace(/^\.\//, ""));
+  return cited.some((c) => [...changed].some((p) => c === p || p.endsWith(`/${c}`) || c.endsWith(`/${p}`)));
+}
+var PATH_TOKEN = /[\w@.-]+(?:\/[\w@.-]+)*\.\w+/g;
 var CHUNK_CHARS = 25e3;
 var MAX_VERIFY = 25;
+var FIND_AGENTS = 6;
+var VERIFY_AGENTS = 8;
+var seconds2 = (name, fallback) => (Number(process.env[name]) || fallback) * 1e3;
+var FIND_MS = seconds2("REVIEWPILOT_FIND_SECONDS", 240);
+var VERIFY_MS = seconds2("REVIEWPILOT_VERIFY_SECONDS", 180);
 async function review(input2) {
   const { config, diffs, previous, log: log2 } = input2;
-  const changed = diffs.filter((d) => d.status !== "deleted").map((d) => d.path);
+  const changed = input2.scope.filter((d) => d.status !== "deleted").map((d) => d.path);
   const open = previous.filter((p) => p.status === "open");
   const dismissed = previous.filter((p) => p.status === "dismissed");
   const history = [
@@ -16945,9 +17036,10 @@ async function review(input2) {
     dismissed.length && "Dismissed by the author (do not raise again):\n" + dismissed.map((p) => `- ${p.file}:${p.line} ${p.title}`).join("\n")
   ].filter(Boolean);
   const all = diffs.map((d) => `- ${d.path} (${d.status})`).join("\n");
-  const chunks = chunk(diffs, CHUNK_CHARS);
-  log2(`find: ${changed.length} files in ${chunks.length} parts`);
-  const parts = await pool(chunks, 3, async (part, i) => {
+  const chunks = chunk(input2.scope, CHUNK_CHARS);
+  log2(`find: ${changed.length} of ${diffs.length} files in ${chunks.length} parts`);
+  const findStart = Date.now();
+  const parts = await pool(chunks, FIND_AGENTS, async (part, i) => {
     const mine = part.filter((d) => d.status !== "deleted").map((d) => d.path);
     const user = [
       `PR title: ${input2.pr.title}`,
@@ -16968,28 +17060,36 @@ ${d.numbered}`).join("\n\n")}`
       user,
       submit: submitFindings(mine),
       maxTurns: 12,
-      deadline: Date.now() + 4 * 6e4,
+      deadline: Date.now() + FIND_MS,
       log: (line) => log2(`[part ${i + 1}] ${line}`)
     }).catch((e) => {
       log2(`[part ${i + 1}] find failed: ${e instanceof Error ? e.message : String(e)}`);
       return void 0;
     });
   });
+  const findMs = Date.now() - findStart;
   const failedParts = parts.filter((p) => p === void 0).length;
+  const reviewed = chunks.flatMap((part, i) => {
+    const p = parts[i];
+    return p ? part.filter((d) => p.checked.has(d.path)).map((d) => d.path) : [];
+  });
   const ruleIds = new Set(input2.rules.map((r) => r.id));
-  const candidates = parts.flatMap((p) => p ?? []);
+  const candidates = parts.flatMap((p) => p?.findings ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input2.root, c.file).then(Boolean)));
   const found = candidates.filter((_, i) => exists[i]).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
   if (found.length < candidates.length) log2(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
   log2(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
+  const changedPaths = new Set(input2.scope.map((d) => d.path));
+  const recheck = open.filter((p) => diffs.some((d) => d.path === p.file));
+  const due = recheck.filter((p) => stale(p, changedPaths));
+  if (due.length < recheck.length) log2(`verify: ${recheck.length - due.length} earlier findings kept as they were, their code did not change`);
   const jobs = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
-    // An earlier finding is re-checked only when its file is in the reviewed diff. Without
-    // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
-    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p }))
+    ...due.map((p) => ({ finding: p, previous: p }))
   ];
   const patchOf = (file) => diffs.find((d) => d.path === file)?.numbered ?? "(This file is not changed in the PR. Open it with read_file, and check what in the diff it depends on.)";
-  const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
+  const verifyStart = Date.now();
+  const checked = await pool(jobs, VERIFY_AGENTS, async ({ finding, previous: prev }) => {
     const verdict = await runAgent({
       llm: input2.verify,
       root: input2.root,
@@ -17007,7 +17107,7 @@ ${patchOf(finding.file)}`
       ].filter(Boolean).join("\n\n"),
       submit: submitVerdict,
       maxTurns: 12,
-      deadline: Date.now() + 3 * 6e4,
+      deadline: Date.now() + VERIFY_MS,
       log: () => {
       }
     }).catch((e) => {
@@ -17017,7 +17117,7 @@ ${patchOf(finding.file)}`
     if (verdict) log2(`verify ${verdict.verdict}: ${finding.file}:${finding.line} ${finding.title} (${verdict.reason.slice(0, 160)})`);
     return { finding, ...verdict ? { verdict } : {}, ...prev ? { previous: prev } : {} };
   });
-  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed, findMs, verifyMs: Date.now() - verifyStart };
 }
 var Groups = type({ duplicates: "string[][]" });
 async function dedupe(llm, root, findings, known, log2) {
@@ -17076,6 +17176,7 @@ var settle = (finding, verdict) => ({
 
 // src/index.ts
 var MAX_DIFF_CHARS = 4e5;
+var STALE_CHECK_MS = 60 * 6e4;
 var GUIDANCE_CHARS = 1e4;
 var MAINTAINERS = /* @__PURE__ */ new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 var input = (name) => process.env[`INPUT_${name.toUpperCase()}`]?.trim() || void 0;
@@ -17084,6 +17185,14 @@ var Event = type({
   "pull_request?": { number: "number" },
   "issue?": { number: "number", "pull_request?": "unknown" },
   "comment?": { id: "number", body: "string", author_association: "string", user: { login: "string" } }
+});
+var posting = false;
+var stopping = false;
+var putBack;
+process.on("SIGTERM", () => {
+  if (posting || stopping) return;
+  stopping = true;
+  void Promise.race([putBack?.(), new Promise((r) => setTimeout(r, 1e4))]).finally(() => process.exit(143));
 });
 async function main() {
   const started = Date.now();
@@ -17121,9 +17230,51 @@ async function main() {
     const edited = summaryId ? await gh.editComment(summaryId, body).catch(() => void 0) : void 0;
     summaryId = edited?.id ?? (await gh.comment(number2, body)).id;
   }
+  const checkReady = dryRun ? Promise.resolve(void 0) : gh.createCheck(pr.head.sha, {
+    status: "in_progress",
+    started_at: new Date(started).toISOString(),
+    output: { title: "Reviewing", summary: `Reviewing ${pr.head.sha.slice(0, 7)}. The score and findings appear here when it is done.` }
+  }).then((c) => c.id, (e) => {
+    log.warn(`No ReviewPilot check, the token needs Checks write: ${String(e).slice(0, 200)}`);
+    return void 0;
+  });
+  const finishCheck = async (body) => {
+    const id = await checkReady;
+    if (id === void 0) return;
+    await gh.updateCheck(id, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...body }).then(() => void 0, (e) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
+  };
+  let restoring;
+  let stateSaved = false;
+  const restoreSummary = (what) => restoring ??= putBackSummary(what);
+  const putBackSummary = async (what) => {
+    if (dryRun || summaryId === void 0 || stateSaved) return;
+    await finishCheck({
+      conclusion: what === "stopped" ? "cancelled" : "neutral",
+      output: { title: what === "stopped" ? "Stopped" : "Review failed", summary: what === "stopped" ? "A newer push or the time limit stopped this review." : "The review failed. Comment `/review` to retry." }
+    });
+    const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
+    const restore = existing?.id === summaryId && !existing.body.startsWith(PROGRESS) ? existing.body : void 0;
+    const why = what === "stopped" ? "A newer push or the time limit stopped it." : process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
+    const body = restore ?? `## ReviewPilot: review ${what} for ${pr.head.sha.slice(0, 7)}
+
+${why} Comment \`/review\` to retry.
+${SUMMARY_TAG}${prev ? `
+${writeState(prev)}` : ""}`;
+    await gh.editComment(summaryId, body).catch(() => void 0);
+  };
+  putBack = () => restoreSummary("stopped");
+  const checkId = await checkReady;
+  if (checkId !== void 0) {
+    const cutoff = Date.now() - STALE_CHECK_MS;
+    const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
+    const stale2 = leftover.filter((c) => c.id !== checkId && c.started_at !== null && Date.parse(c.started_at) < cutoff).map((c) => c.id);
+    for (const id of stale2) {
+      await gh.updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: (/* @__PURE__ */ new Date()).toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } }).catch(() => void 0);
+    }
+  }
   try {
     const { config, warning, mergeBase, defaultRef } = await log.phase("Checkout", async () => {
-      const mergeBase2 = await checkoutPr(root, number2, pr.head.sha, pr.base.sha);
+      const mergeBase2 = await checkoutPr(root, number2, pr.head.sha, pr.base);
       const defaultRef2 = await fetchRef(root, pr.base.repo.default_branch);
       return { mergeBase: mergeBase2, defaultRef: defaultRef2, ...loadConfig(await readAt(root, defaultRef2, ".reviewpilot.yml")) };
     });
@@ -17172,7 +17323,9 @@ ${text}` : "";
     const llm = (m) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates, verified, failedParts, parts } = await log.phase(
+    const seen = comment || config.review.scope === "all" ? void 0 : prev?.files;
+    const scope2 = focus(diffs, seen);
+    const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase(
       "Review",
       () => review({
         find,
@@ -17183,6 +17336,7 @@ ${text}` : "";
         guidance,
         pr: { title: pr.title, body: pr.body ?? "" },
         diffs,
+        scope: scope2,
         previous,
         log: log.line
       })
@@ -17217,11 +17371,27 @@ ${text}` : "";
       return { findings: findings2, fresh: fresh2, overCap: overCap2 };
     });
     const open = findings.filter((f) => f.status === "open");
-    const state = { head: pr.head.sha, score: score(open), findings };
+    const done = new Set(reviewed);
+    const files = {};
+    for (const d of diffs) {
+      const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
+      if (hash) files[d.path] = hash;
+    }
+    const state = { head: pr.head.sha, score: score(open), findings, files };
+    const comments = !dryRun && fresh.length ? await gh.reviewComments(number2).catch((e) => {
+      log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
+      return [];
+    }) : [];
+    const posted = postedOnHead(comments, pr.head.sha, ours);
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline = [];
     const outside = [];
     for (const f of fresh) {
+      const id = posted.get(f.fp);
+      if (id !== void 0) {
+        f.commentId = id;
+        continue;
+      }
       const at = anchor(byPath.get(f.file), f.line, f.endLine);
       if (at) inline.push({ path: f.file, line: at.line, ...at.startLine ? { start_line: at.startLine } : {}, body: inlineBody(f) });
       else outside.push(f);
@@ -17235,18 +17405,27 @@ ${text}` : "";
       failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : ""
     ].filter(Boolean).join(" ");
     const modelLabel = verifyModel === model ? model : `${model} (verify: ${verifyModel})`;
+    const usage = verify === find ? find.usage : {
+      calls: find.usage.calls + verify.usage.calls,
+      prompt: find.usage.prompt + verify.usage.prompt,
+      completion: find.usage.completion + verify.usage.completion,
+      cached: find.usage.cached + verify.usage.cached
+    };
+    const elapsed = Date.now() - started;
     const run2 = {
       repo,
       head: pr.head.sha,
       model: modelLabel,
       files: diffs.length,
+      reviewed: reviewed.length,
       candidates,
       verified,
-      seconds: Math.round((Date.now() - started) / 1e3),
+      seconds: Math.round(elapsed / 1e3),
+      timing: `find ${seconds(findMs)}, verify ${seconds(verifyMs)}, rest ${seconds(Math.max(0, elapsed - findMs - verifyMs))}`,
+      tokens: { prompt: usage.prompt, cached: usage.cached },
       ...warningText ? { warning: warningText } : {}
     };
-    const usage = verify === find ? find.usage : { calls: find.usage.calls + verify.usage.calls, prompt: find.usage.prompt + verify.usage.prompt, completion: find.usage.completion + verify.usage.completion };
-    log.line(`Score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed. ${usage.calls} model calls, ${usage.prompt.toLocaleString("en")} in / ${usage.completion.toLocaleString("en")} out tokens.`);
+    log.line(`Score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed. ${usage.calls} model calls, ${usage.prompt.toLocaleString("en")} in (${usage.cached.toLocaleString("en")} cached) / ${usage.completion.toLocaleString("en")} out tokens.`);
     if (dryRun) {
       for (const c of inline) log.line(`
 --- inline ${c.path}:${c.start_line ? `${c.start_line}-` : ""}${c.line}
@@ -17256,25 +17435,28 @@ ${c.body}`);
 ${summaryBody(state, prev, outside, run2)}`);
       return;
     }
+    if (stopping) return;
+    posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {
-        const posted = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
+        const sent = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
           log.warn(`Inline review failed, findings go to the summary instead: ${String(e)}`);
           return false;
         });
-        if (posted) {
-          const comments = await gh.reviewComments(number2).catch(() => []);
+        if (sent) {
+          const comments2 = await gh.reviewComments(number2).catch(() => []);
           for (const f of fresh) {
-            const id = comments.findLast((c) => !c.in_reply_to_id && ours(c.user?.login) && lastMarker(c.body, FINDING_TAG) === f.fp)?.id;
+            const id = comments2.findLast((c) => !c.in_reply_to_id && ours(c.user?.login) && lastMarker(c.body, FINDING_TAG) === f.fp)?.id;
             if (id !== void 0) f.commentId = id;
           }
         } else {
-          outside.push(...fresh.filter((f) => !outside.includes(f)));
+          outside.push(...fresh.filter((f) => !outside.includes(f) && !posted.has(f.fp)));
         }
       }
       const body = summaryBody(state, prev, outside, run2);
       const saved = summaryId !== void 0 && await gh.editComment(summaryId, body).then(() => true, () => false);
       if (!saved) summaryId = (await gh.comment(number2, body)).id;
+      stateSaved = true;
       for (const old of summaries) {
         if (old.id !== summaryId) await gh.retire(old).catch((e) => log.warn(`Could not retire summary ${old.id}: ${String(e)}`));
       }
@@ -17292,6 +17474,10 @@ ${summaryBody(state, prev, outside, run2)}`);
         if (!resolved) unresolved += 1;
       });
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
+      const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
+      const result = checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`, partial);
+      const finished = checkId !== void 0 && await gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...result }).then(() => true, () => false);
+      if (checkId !== void 0 && !finished && result.output) await finishCheck({ ...result, output: { ...result.output, annotations: [] } });
     });
     await log.report({
       score: state.score,
@@ -17302,15 +17488,10 @@ ${summaryBody(state, prev, outside, run2)}`);
       model: modelLabel
     });
   } catch (e) {
-    if (!dryRun && summaryId !== void 0) {
-      const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-      const restore = existing?.id === summaryId ? existing.body : void 0;
-      const body = restore ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
-
-See the [workflow run](${runUrl}). Comment \`/review\` to retry.
-${SUMMARY_TAG}${prev ? `
-${writeState(prev)}` : ""}`;
-      await gh.editComment(summaryId, body).catch(() => void 0);
+    if (stateSaved) {
+      await finishCheck({ conclusion: "neutral", output: { title: "Posted, then a later step failed", summary: "The review and its summary are posted. A later step failed; see the logs." } });
+    } else {
+      await restoreSummary("failed");
     }
     throw e;
   }

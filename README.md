@@ -2,7 +2,7 @@
 
 # ReviewPilot
 
-An open-source PR reviewer that reads the code it needs, re-checks every finding against that code, and posts only what it can prove. Bring your own model key. No dashboard, no server.
+An open-source PR reviewer that reads the code it needs, re-checks every finding against that code, and posts only what it can prove. Bring your own model key. No dashboard. Runs in GitHub Actions, or as a small server you host for busy repos.
 
 Docs: [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)
 
@@ -10,7 +10,9 @@ Docs: [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)
 
 1. **Find.** The diff is split into parts and each part goes to an agent with read-only tools (read a file, search the repo, list a directory). It opens callers, types and guards as it needs them and lists every specific suspicion.
 2. **Verify.** Each candidate goes to a fresh agent that assumes it is wrong. It traces the trigger through the real code, looks for a guard that already prevents it, and confirms only what holds up.
-3. **Post.** Confirmed findings become inline comments. One summary comment shows the score and what changed since the last push.
+3. **Post.** Confirmed findings become inline comments. One summary comment shows the score and what changed since the last push. The ReviewPilot check passes at 5/5, fails below, and annotates every open finding on its lines.
+
+On a push, only files whose diff changed since the last review are read again. `/review` reads everything.
 
 The tools never run PR code and cannot leave the checkout.
 
@@ -42,6 +44,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  checks: write        # the ReviewPilot check with the score and annotations
 jobs:
   review:
     # Comment-triggered runs get your secrets even on public repos, so only maintainers'
@@ -52,6 +55,11 @@ jobs:
         && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # One review per pull request at a time: a /review during a push review waits its turn.
+    # On the job, not the workflow, so skipped runs (other comments) never join the group.
+    concurrency:
+      group: reviewpilot-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
         with:
@@ -66,7 +74,7 @@ Comment `/review` on a PR to re-run it. GitHub runs comment-triggered workflows 
 
 ### Post as your own bot
 
-Without anything else, comments come from `github-actions[bot]`. To post under your own name, create a GitHub App (Pull requests and Issues: read and write, Contents: read, webhook off), install it, and mint its token before the review step:
+Without anything else, comments come from `github-actions[bot]`. To post under your own name, create a GitHub App (Pull requests and Issues: read and write, Contents: read, Checks: read and write for the ReviewPilot check, webhook off), install it, and mint its token before the review step:
 
 ```yaml
       - id: app
@@ -81,6 +89,19 @@ Without anything else, comments come from `github-actions[bot]`. To post under y
           github_token: ${{ steps.app.outputs.token }}
           bot_login: ${{ steps.app.outputs.app-slug }}[bot]
 ```
+
+### Run it as a server
+
+For busy repos: no job time limit, a burst of pushes becomes one review, a push during a review stops the stale one, and clones stay warm. `packages/server` is a GitHub App webhook server that runs the same reviewer; the repo ships a `Dockerfile` and `fly.toml` for Fly.io.
+
+```sh
+fly apps create <your-app>
+fly volumes create reviewpilot_data --size 5 -a <your-app>
+fly secrets set -a <your-app> WEBHOOK_SECRET=... APP_ID=... PRIVATE_KEY="$(cat app.private-key.pem)" REVIEWPILOT_API_KEY=...
+fly deploy -a <your-app> --ha=false
+```
+
+Point the App's webhook at `https://<your-app>.fly.dev/webhook`, subscribe it to Pull request and Issue comment, and remove the workflow from those repos. From then on, installing the App on a repo is all it takes. `.github/workflows/deploy.yml` redeploys on every merge to `main`. Full guide: [Run it as a server](https://reviewpilot.rafay99.com/docs/#server).
 
 ## Configure
 
@@ -97,6 +118,7 @@ review:
   ignore: ["docs/**"]           # added to the built-in lockfile/build/asset ignores
   min_severity: minor           # minor | major | critical
   max_findings: 20
+  scope: changed                # changed: a push re-reads only changed files | all: the whole PR
 
 # Read as repo guidance on every review (default: AGENTS.md and CLAUDE.md).
 context_files: [AGENTS.md, CLAUDE.md]
@@ -128,7 +150,7 @@ rules:
 
 ## Develop
 
-A Turborepo with two workspaces: `packages/action` (the reviewer) and `apps/web` (the site and docs, [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)).
+A Turborepo with three workspaces: `packages/action` (the reviewer), `packages/server` (the webhook server) and `apps/web` (the site and docs, [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)).
 
 ```sh
 pnpm install
@@ -142,4 +164,4 @@ REVIEWPILOT_API_KEY=... pnpm --filter @reviewpilot/action local owner/repo 123  
 
 ## My repos
 
-My repos call `.github/workflows/review.yml` (owner-only gating plus the `reviewpilot[bot]` App token) through `caller.yml`. `enable.sh owner/repo` sets the secrets and opens the PR that adds it.
+My repos are reviewed by the server: the ReviewPilot Bot App is installed on all of them and sends its webhooks to `reviewpilot-rafay` on Fly.io, so a new repo is covered without any setup. The old per-repo workflows (`caller.yml` calling `.github/workflows/review.yml`, added by `enable.sh`) are disabled.

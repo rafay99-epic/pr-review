@@ -4,9 +4,10 @@
 
 import { appendFile } from "node:fs/promises";
 
-export type Usage = { calls: number; prompt: number; completion: number };
+export type Usage = { calls: number; prompt: number; completion: number; cached: number };
 
-const seconds = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
+/** A duration for people: `48.2s` under a minute, `3m 12s` above. */
+export const seconds = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
 
 export function createLog(actions: boolean) {
   const phases: { name: string; ms: number }[] = [];
@@ -51,7 +52,7 @@ export function createLog(actions: boolean) {
           rows,
           `| **Total** | **${seconds(total)}** |`,
           "",
-          `Model \`${facts.model}\`: ${facts.usage.calls} calls, ${facts.usage.prompt.toLocaleString("en")} input and ${facts.usage.completion.toLocaleString("en")} output tokens.`,
+          `Model \`${facts.model}\`: ${facts.usage.calls} calls, ${facts.usage.prompt.toLocaleString("en")} input (${facts.usage.cached.toLocaleString("en")} cached) and ${facts.usage.completion.toLocaleString("en")} output tokens.`,
           "",
         ].join("\n"),
       );

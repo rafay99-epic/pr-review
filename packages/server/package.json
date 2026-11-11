@@ -1,0 +1,19 @@
+{
+  "name": "@reviewpilot/server",
+  "private": true,
+  "type": "module",
+  "description": "ReviewPilot as a GitHub App webhook service: debounces pushes per PR, stops stale reviews, and runs the action against warm clones.",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/server.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "arktype": "^2.1.20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "7.0.2"
+  }
+}

@@ -64,7 +64,7 @@ export function Hero() {
       <div className="border-y border-line">
         <ul className="mx-auto flex max-w-6xl flex-wrap gap-x-10 gap-y-2 px-4 py-5 font-mono text-[13px] text-mute sm:px-6">
           <li>No dashboard</li>
-          <li>No server</li>
+          <li>Actions or self-hosted</li>
           <li>Your model, your key</li>
           <li>State lives in the PR</li>
           <li>MIT</li>
