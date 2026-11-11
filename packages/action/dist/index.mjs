@@ -16040,8 +16040,11 @@ function readState(body) {
     return void 0;
   }
 }
+var FILES_BUDGET = 2e4;
 var STATE_BUDGET = 48e3;
-function writeState(state) {
+function writeState(full) {
+  const { files, ...rest } = full;
+  const state = files && JSON.stringify(files).length <= FILES_BUDGET ? { ...rest, files } : rest;
   const open = state.findings.filter((f) => f.status === "open");
   let closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
   const steps = [
@@ -16224,13 +16227,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 var exec = promisify(execFile);
 var git = async (root, ...args2) => (await exec("git", args2, { cwd: root, maxBuffer: 256 * 1024 * 1024 })).stdout;
-async function checkoutPr(root, pr, head, baseSha) {
+async function checkoutPr(root, pr, head, base) {
   if ((await git(root, "rev-parse", "--is-shallow-repository")).trim() === "true") {
     await git(root, "fetch", "--no-tags", "--unshallow", "origin");
   }
-  await git(root, "fetch", "--no-tags", "origin", `+refs/pull/${pr}/head:refs/reviewpilot/head`);
-  await git(root, "checkout", "--quiet", "--detach", head);
-  return (await git(root, "merge-base", baseSha, head)).trim();
+  await git(root, "fetch", "--no-tags", "origin", `+refs/pull/${pr}/head:refs/reviewpilot/head`, `+refs/heads/${base.ref}:refs/reviewpilot/base`);
+  await git(root, "checkout", "--quiet", "--force", "--detach", head);
+  return (await git(root, "merge-base", base.sha, head)).trim();
 }
 var diff = (root, from, to, ignore) => git(
   root,
@@ -16269,7 +16272,14 @@ var Pr = type({
   base: { ref: "string", sha: "string", repo: { default_branch: "string" } }
 });
 var IssueComment = type({ id: "number", node_id: "string", body: "string", user: User.or("null") });
-var ReviewComment = type({ id: "number", body: "string", "in_reply_to_id?": "number", user: User.or("null") });
+var ReviewComment = type({
+  id: "number",
+  body: "string",
+  "in_reply_to_id?": "number",
+  /** The commit the comment was made on; unlike commit_id it does not move when the line goes stale. */
+  "original_commit_id?": "string",
+  user: User.or("null")
+});
 var Created = type({ id: "number" });
 var GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 var ThreadsData = type({
@@ -16841,16 +16851,19 @@ function submitFindings(changed) {
       if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,
-        value: out.findings.map((c) => ({
-          file: c.file.replace(/^\.\//, ""),
-          line: c.line,
-          endLine: Math.max(c.line, c.end_line ?? c.line),
-          severity: c.severity,
-          title: c.title.trim(),
-          body: c.body.trim(),
-          evidence: c.evidence,
-          ...c.rule ? { rule: c.rule } : {}
-        }))
+        value: {
+          checked,
+          findings: out.findings.map((c) => ({
+            file: c.file.replace(/^\.\//, ""),
+            line: c.line,
+            endLine: Math.max(c.line, c.end_line ?? c.line),
+            severity: c.severity,
+            title: c.title.trim(),
+            body: c.body.trim(),
+            evidence: c.evidence,
+            ...c.rule ? { rule: c.rule } : {}
+          }))
+        }
       };
     }
   };
@@ -16983,9 +16996,12 @@ ${d.numbered}`).join("\n\n")}`
     });
   });
   const failedParts = parts.filter((p) => p === void 0).length;
-  const reviewed = chunks.flatMap((part, i) => parts[i] ? part.map((d) => d.path) : []);
+  const reviewed = chunks.flatMap((part, i) => {
+    const p = parts[i];
+    return p ? part.filter((d) => d.status === "deleted" || p.checked.has(d.path)).map((d) => d.path) : [];
+  });
   const ruleIds = new Set(input2.rules.map((r) => r.id));
-  const candidates = parts.flatMap((p) => p ?? []);
+  const candidates = parts.flatMap((p) => p?.findings ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input2.root, c.file).then(Boolean)));
   const found = candidates.filter((_, i) => exists[i]).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
   if (found.length < candidates.length) log2(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
@@ -17094,8 +17110,10 @@ var Event = type({
   "comment?": { id: "number", body: "string", author_association: "string", user: { login: "string" } }
 });
 var posting = false;
+var putBack;
 process.on("SIGTERM", () => {
-  if (!posting) process.exit(143);
+  if (posting) return;
+  void Promise.race([putBack?.(), new Promise((r) => setTimeout(r, 1e4))]).finally(() => process.exit(143));
 });
 async function main() {
   const started = Date.now();
@@ -17133,9 +17151,22 @@ async function main() {
     const edited = summaryId ? await gh.editComment(summaryId, body).catch(() => void 0) : void 0;
     summaryId = edited?.id ?? (await gh.comment(number2, body)).id;
   }
+  const restoreSummary = async (what) => {
+    if (dryRun || summaryId === void 0) return;
+    const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
+    const restore = existing?.id === summaryId ? existing.body : void 0;
+    const why = what === "stopped" ? "A newer push or the time limit stopped it." : process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
+    const body = restore ?? `## ReviewPilot: review ${what} for ${pr.head.sha.slice(0, 7)}
+
+${why} Comment \`/review\` to retry.
+${SUMMARY_TAG}${prev ? `
+${writeState(prev)}` : ""}`;
+    await gh.editComment(summaryId, body).catch(() => void 0);
+  };
+  putBack = () => restoreSummary("stopped");
   try {
     const { config, warning, mergeBase, defaultRef } = await log.phase("Checkout", async () => {
-      const mergeBase2 = await checkoutPr(root, number2, pr.head.sha, pr.base.sha);
+      const mergeBase2 = await checkoutPr(root, number2, pr.head.sha, pr.base);
       const defaultRef2 = await fetchRef(root, pr.base.repo.default_branch);
       return { mergeBase: mergeBase2, defaultRef: defaultRef2, ...loadConfig(await readAt(root, defaultRef2, ".reviewpilot.yml")) };
     });
@@ -17233,17 +17264,28 @@ ${text}` : "";
     });
     const open = findings.filter((f) => f.status === "open");
     const done = new Set(reviewed);
-    const files = Object.fromEntries(
-      diffs.flatMap((d) => {
-        const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
-        return hash ? [[d.path, hash]] : [];
-      })
-    );
+    const files = {};
+    for (const d of diffs) {
+      const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
+      if (hash) files[d.path] = hash;
+    }
     const state = { head: pr.head.sha, score: score(open), findings, files };
+    const posted = /* @__PURE__ */ new Map();
+    if (!dryRun && fresh.length) {
+      for (const c of await gh.reviewComments(number2).catch(() => [])) {
+        const fp = lastMarker(c.body, FINDING_TAG);
+        if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === pr.head.sha) posted.set(fp, c.id);
+      }
+    }
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline = [];
     const outside = [];
     for (const f of fresh) {
+      const id = posted.get(f.fp);
+      if (id !== void 0) {
+        f.commentId = id;
+        continue;
+      }
       const at = anchor(byPath.get(f.file), f.line, f.endLine);
       if (at) inline.push({ path: f.file, line: at.line, ...at.startLine ? { start_line: at.startLine } : {}, body: inlineBody(f) });
       else outside.push(f);
@@ -17282,11 +17324,11 @@ ${summaryBody(state, prev, outside, run2)}`);
     posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {
-        const posted = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
+        const posted2 = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
           log.warn(`Inline review failed, findings go to the summary instead: ${String(e)}`);
           return false;
         });
-        if (posted) {
+        if (posted2) {
           const comments = await gh.reviewComments(number2).catch(() => []);
           for (const f of fresh) {
             const id = comments.findLast((c) => !c.in_reply_to_id && ours(c.user?.login) && lastMarker(c.body, FINDING_TAG) === f.fp)?.id;
@@ -17326,17 +17368,7 @@ ${summaryBody(state, prev, outside, run2)}`);
       model: modelLabel
     });
   } catch (e) {
-    if (!dryRun && summaryId !== void 0) {
-      const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-      const restore = existing?.id === summaryId ? existing.body : void 0;
-      const where = process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
-      const body = restore ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
-
-${where} Comment \`/review\` to retry.
-${SUMMARY_TAG}${prev ? `
-${writeState(prev)}` : ""}`;
-      await gh.editComment(summaryId, body).catch(() => void 0);
-    }
+    await restoreSummary("failed");
     throw e;
   }
 }

@@ -85,6 +85,9 @@ export function readState(body: string): State | undefined {
   }
 }
 
+/** JSON characters the reviewed-file hashes may take, about 300 files. */
+const FILES_BUDGET = 20_000;
+
 /** Encoded state never exceeds this, leaving room for the markdown in a 65,536-character comment. */
 export const STATE_BUDGET = 48_000;
 
@@ -93,7 +96,11 @@ export const STATE_BUDGET = 48_000;
  * 100); open ones are trimmed in steps (evidence, then bodies, then the oldest closed) until
  * it fits, so a long-lived PR can never push the summary past GitHub's comment limit.
  */
-export function writeState(state: State): string {
+export function writeState(full: State): string {
+  // Past FILES_BUDGET the hashes are dropped: the next push re-reads every file, and the
+  // findings keep the room.
+  const { files, ...rest } = full;
+  const state = files && JSON.stringify(files).length <= FILES_BUDGET ? { ...rest, files } : rest;
   const open = state.findings.filter((f) => f.status === "open");
   let closed = state.findings.filter((f) => f.status !== "open").slice(-100).map((f) => ({ ...f, body: "", evidence: [] }));
   const steps = [

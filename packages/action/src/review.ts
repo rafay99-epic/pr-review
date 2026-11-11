@@ -49,7 +49,10 @@ function toolSpec(name: string, description: string, schema: type.Any): ToolSpec
   return { type: "function", function: { name, description, parameters } };
 }
 
-function submitFindings(changed: readonly string[]): Submit<Finding[]> {
+/** A find agent's answer: its candidates, and the files it says it checked. */
+type FindResult = { findings: Finding[]; checked: Set<string> };
+
+function submitFindings(changed: readonly string[]): Submit<FindResult> {
   return {
     spec: toolSpec("submit_findings", "Submit the review. Call once, after checking every changed file.", Findings),
     parse(args, final) {
@@ -61,7 +64,9 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
       if (missed.length && !final) return { ok: false, error: `you have not checked: ${missed.join(", ")}` };
       return {
         ok: true,
-        value: out.findings.map((c) => ({
+        value: {
+          checked,
+          findings: out.findings.map((c) => ({
           file: c.file.replace(/^\.\//, ""),
           line: c.line,
           endLine: Math.max(c.line, c.end_line ?? c.line),
@@ -70,7 +75,8 @@ function submitFindings(changed: readonly string[]): Submit<Finding[]> {
           body: c.body.trim(),
           evidence: c.evidence,
           ...(c.rule ? { rule: c.rule } : {}),
-        })),
+          })),
+        },
       };
     },
   };
@@ -244,12 +250,16 @@ export async function review(
     });
   });
   const failedParts = parts.filter((p) => p === undefined).length;
-  // Files in parts that finished; a failed part's files are read again on the next run.
-  const reviewed = chunks.flatMap((part, i) => (parts[i] ? part.map((d) => d.path) : []));
+  // Files the agents checked. A failed part's files, and any a part ran out of budget on,
+  // are read again on the next run. Deleted files have nothing to check.
+  const reviewed = chunks.flatMap((part, i) => {
+    const p = parts[i];
+    return p ? part.filter((d) => d.status === "deleted" || p.checked.has(d.path)).map((d) => d.path) : [];
+  });
   // A candidate must point at a file that exists in the checkout (a model steered by the PR
   // could otherwise put arbitrary text in a link), and may only cite rules that exist.
   const ruleIds = new Set(input.rules.map((r) => r.id));
-  const candidates = parts.flatMap((p) => p ?? []);
+  const candidates = parts.flatMap((p) => p?.findings ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input.root, c.file).then(Boolean)));
   const found = candidates
     .filter((_, i) => exists[i])

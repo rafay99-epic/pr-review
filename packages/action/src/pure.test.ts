@@ -163,3 +163,10 @@ test("reviewed file hashes survive the state round trip", () => {
   const state = { head: "abc", score: 5 as const, findings: [], files: { "a.ts": diffHash("x") } };
   assert.deepEqual(readState(writeState(state))?.files, state.files);
 });
+
+test("a huge file-hash map is dropped so the state stays in budget", () => {
+  const files = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => [`packages/some/deep/path/file-${i}.ts`, diffHash(String(i))]));
+  const out = writeState({ head: "abc", score: 5, findings: [], files });
+  assert.ok(out.length <= STATE_BUDGET + 40);
+  assert.equal(readState(out)?.files, undefined);
+});

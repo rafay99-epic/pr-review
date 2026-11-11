@@ -18,7 +18,14 @@ const Pr = type({
 });
 
 const IssueComment = type({ id: "number", node_id: "string", body: "string", user: User.or("null") });
-const ReviewComment = type({ id: "number", body: "string", "in_reply_to_id?": "number", user: User.or("null") });
+const ReviewComment = type({
+  id: "number",
+  body: "string",
+  "in_reply_to_id?": "number",
+  /** The commit the comment was made on; unlike commit_id it does not move when the line goes stale. */
+  "original_commit_id?": "string",
+  user: User.or("null"),
+});
 const Created = type({ id: "number" });
 const GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 

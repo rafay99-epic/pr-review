@@ -43,13 +43,17 @@ const Event = type({
 });
 
 /**
- * A newer push makes this run stale, and the server stops it with SIGTERM. Before posting
- * that is safe: the summary still carries the previous state, so the next run picks up from
- * it. Once posting starts the run finishes, or the next one would post the same comments.
+ * A newer push makes this run stale, and the server stops it with SIGTERM (also used for its
+ * time limit). Before posting that is safe: the summary is put back as it was and the next
+ * run starts from the same state. Once posting starts the run finishes it.
  */
 let posting = false;
+/** Restores the summary this run replaced with "reviewing"; set once it has done so. */
+let putBack: (() => Promise<unknown>) | undefined;
 process.on("SIGTERM", () => {
-  if (!posting) process.exit(143);
+  if (posting) return;
+  // Bounded, so a hung GitHub call cannot keep a stopped run alive.
+  void Promise.race([putBack?.(), new Promise((r) => setTimeout(r, 10_000))]).finally(() => process.exit(143));
 });
 
 async function main() {
@@ -100,9 +104,23 @@ async function main() {
     summaryId = edited?.id ?? (await gh.comment(number, body)).id;
   }
 
+  // Puts the previous summary back so a failed or stopped run never wipes the PR's history;
+  // on a first run, says what happened instead of leaving "reviewing..." up.
+  const restoreSummary = async (what: "failed" | "stopped") => {
+    if (dryRun || summaryId === undefined) return;
+    const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
+    const restore = existing?.id === summaryId ? existing.body : undefined;
+    const why = what === "stopped"
+      ? "A newer push or the time limit stopped it."
+      : process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
+    const body = restore ?? `## ReviewPilot: review ${what} for ${pr.head.sha.slice(0, 7)}\n\n${why} Comment \`/review\` to retry.\n${SUMMARY_TAG}${prev ? `\n${writeState(prev)}` : ""}`;
+    await gh.editComment(summaryId, body).catch(() => undefined);
+  };
+  putBack = () => restoreSummary("stopped");
+
   try {
     const { config, warning, mergeBase, defaultRef } = await log.phase("Checkout", async () => {
-      const mergeBase = await checkoutPr(root, number, pr.head.sha, pr.base.sha);
+      const mergeBase = await checkoutPr(root, number, pr.head.sha, pr.base);
       const defaultRef = await fetchRef(root, pr.base.repo.default_branch);
       return { mergeBase, defaultRef, ...loadConfig(await readAt(root, defaultRef, ".reviewpilot.yml")) };
     });
@@ -225,19 +243,33 @@ async function main() {
 
     const open = findings.filter((f) => f.status === "open");
     const done = new Set(reviewed);
-    const files = Object.fromEntries(
-      diffs.flatMap((d) => {
-        const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
-        return hash ? [[d.path, hash]] : [];
-      }),
-    );
+    const files: Record<string, string> = {};
+    for (const d of diffs) {
+      const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
+      if (hash) files[d.path] = hash;
+    }
     const state: State = { head: pr.head.sha, score: score(open), findings, files };
+
+    // A run stopped mid-post (deploy, kill) may have posted some of these on this head
+    // already: they keep that comment instead of getting a second one.
+    const posted = new Map<string, number>();
+    if (!dryRun && fresh.length) {
+      for (const c of await gh.reviewComments(number).catch(() => [])) {
+        const fp = lastMarker(c.body, FINDING_TAG);
+        if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === pr.head.sha) posted.set(fp, c.id);
+      }
+    }
 
     // New findings go inline where the diff allows; the rest go to the summary.
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline: InlineComment[] = [];
     const outside: Tracked[] = [];
     for (const f of fresh) {
+      const id = posted.get(f.fp);
+      if (id !== undefined) {
+        f.commentId = id;
+        continue;
+      }
       const at = anchor(byPath.get(f.file), f.line, f.endLine);
       if (at) inline.push({ path: f.file, line: at.line, ...(at.startLine ? { start_line: at.startLine } : {}), body: inlineBody(f) });
       else outside.push(f);
@@ -329,15 +361,7 @@ async function main() {
       model: modelLabel,
     });
   } catch (e) {
-    // Put the previous summary back so a failed run never wipes the PR's history; on a
-    // first run, say it failed instead of leaving "reviewing..." up.
-    if (!dryRun && summaryId !== undefined) {
-      const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-      const restore = existing?.id === summaryId ? existing.body : undefined;
-      const where = process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
-      const body = restore ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}\n\n${where} Comment \`/review\` to retry.\n${SUMMARY_TAG}${prev ? `\n${writeState(prev)}` : ""}`;
-      await gh.editComment(summaryId, body).catch(() => undefined);
-    }
+    await restoreSummary("failed");
     throw e;
   }
 }
