@@ -26,6 +26,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  checks: write        # the ReviewPilot check with the score and annotations
 jobs:
   review:
     # Comment-triggered runs get your secrets even on public repos, so only maintainers'

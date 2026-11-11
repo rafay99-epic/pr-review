@@ -11,14 +11,14 @@ summary: Computed from verified findings, never asked of the model.
 | 2/5 | A critical issue: security, privacy, data loss, a broken build |
 | 1/5 | Several critical issues |
 
-Because it is derived from findings, the score only moves when findings change.
+Because it is derived from findings, the score only moves when findings change. The ReviewPilot check passes at 5/5 and fails below it, so "green check" means "no verified issues".
 
 ## Across pushes
 
 On every push, open findings are checked again against the new code:
 
 - **Fixed.** ReviewPilot replies "Fixed in" with the commit and collapses the comment as outdated. It also resolves the thread when its token has Contents write; GitHub requires that for an App to resolve threads.
-- **Still open.** It stays in the table with its original wording.
+- **Still open.** It stays in the table with its original wording. A finding whose file and cited code did not change since the last review keeps its verdict without being verified again.
 - **New.** Posted inline, counted in the delta line.
 
 A finding is dismissed, and never raised again, when someone other than ReviewPilot resolves its thread, or when the PR author or a maintainer replies to it.

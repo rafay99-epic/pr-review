@@ -11,7 +11,20 @@ In the workflow, phases are collapsible groups in the Actions log and the job su
 
 ## Time
 
+The summary footer and the check show how long the review took and where the time went: find, verify, and the rest (checkout, diff, posting). While a review runs, the check shows its elapsed time.
+
 A typical review of a 40,000-character diff takes a few minutes. The first review of a large pull request takes longest; later pushes only re-read the files that changed. Model calls back off and retry on rate limits, but never past the agent's own budget. GitHub calls time out after 30 seconds and retry safely: creating a comment is never retried in a way that could post it twice.
+
+## What gets reused
+
+Each layer saves work on the next push:
+
+| Layer | What it skips |
+| --- | --- |
+| Changed files only | The find pass reads only files whose diff changed since the last review |
+| Kept verdicts | Earlier findings whose file and cited code did not change are not verified again |
+| Prompt cache | Agent turns resend the same opening, which providers bill at the cached rate; the footer shows the cached share |
+| Warm clone (server) | No clone per run, only a fetch of the new commits |
 
 ## Runs never collide
 

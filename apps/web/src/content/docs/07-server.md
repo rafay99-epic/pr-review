@@ -28,7 +28,7 @@ In the App's settings:
 - **Webhook URL:** `https://<your-app>.fly.dev/webhook`
 - **Webhook secret:** a long random string, for example `openssl rand -hex 32`. Keep it for step 3.
 - **Subscribe to events:** Pull request, Issue comment.
-- **Permissions:** Pull requests and Issues read and write, Contents read, Checks read.
+- **Permissions:** Pull requests and Issues read and write, Contents read, Checks read and write.
 
 Install the App on the repositories it should review.
 
@@ -40,7 +40,7 @@ fly apps create <your-app>
 fly volumes create reviewpilot_data --size 5 --region iad -a <your-app>
 ```
 
-In `fly.toml`, set `app` to your app's name and `REPOS` to the repositories to review, as `owner/repo` separated by commas. Leave `REPOS` empty to review every repository the App is installed on.
+In `fly.toml`, set `app` to your app's name. `REPOS` is empty by default, which reviews every repository the App is installed on: installing the App on a repository turns ReviewPilot on, and uninstalling turns it off. To limit it, list repositories as `owner/repo` separated by commas.
 
 ## 3. Add the secrets and deploy
 
@@ -72,7 +72,7 @@ The same rules as the workflow:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `REPOS` | empty (all installed) | Repositories to review, `owner/repo,owner/repo` |
+| `REPOS` | empty (all installed) | Optional allowlist, `owner/repo,owner/repo` |
 | `DEBOUNCE_MS` | `60000` | Quiet time after a push before the review starts |
 | `IDLE_EXIT_MS` | `600000` | Idle time before the process exits and the machine stops |
 | `DATA_DIR` | `/data` | Where clones and pending jobs live |
@@ -84,4 +84,4 @@ The model, severity and rules still come from `.reviewpilot.yml` in each reposit
 - **Logs:** `fly logs -a <your-app>`. Each line starts with `[owner/repo#pr]`.
 - **Deploys:** a review that has started posting finishes first. Any other review stops and runs again after the restart, from saved jobs on the volume.
 - **Cost:** the machine bills by the second only while it runs, and stops after ten idle minutes. Fly starts it again when the next webhook arrives. The volume costs $0.15 per GB per month.
-- **No status check:** the workflow showed up as a check on the pull request. The server does not post one; the score lives in the summary comment as before.
+- **Deploy on merge:** `.github/workflows/deploy.yml` runs `flyctl deploy` when `main` changes the server, the action or the deploy config. Add a deploy token as the `FLY_API_TOKEN` secret: `fly tokens create deploy -a <your-app>`.
