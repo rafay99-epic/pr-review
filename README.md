@@ -55,6 +55,11 @@ jobs:
         && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # One review per pull request at a time: a /review during a push review waits its turn.
+    # On the job, not the workflow, so skipped runs (other comments) never join the group.
+    concurrency:
+      group: reviewpilot-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
         with:

@@ -7962,16 +7962,16 @@ var describeCollapsibleDate = (date) => {
   const dayOfMonth = date.getDate();
   const hours = date.getHours();
   const minutes = date.getMinutes();
-  const seconds2 = date.getSeconds();
+  const seconds3 = date.getSeconds();
   const milliseconds = date.getMilliseconds();
-  if (month === 0 && dayOfMonth === 1 && hours === 0 && minutes === 0 && seconds2 === 0 && milliseconds === 0)
+  if (month === 0 && dayOfMonth === 1 && hours === 0 && minutes === 0 && seconds3 === 0 && milliseconds === 0)
     return `${year}`;
   const datePortion = `${months[month]} ${dayOfMonth}, ${year}`;
-  if (hours === 0 && minutes === 0 && seconds2 === 0 && milliseconds === 0)
+  if (hours === 0 && minutes === 0 && seconds3 === 0 && milliseconds === 0)
     return datePortion;
   const h = hours % 12 || 12;
   const suffix2 = hours < 12 ? " AM" : " PM";
-  let timePortion = seconds2 || milliseconds ? `${h}:${pad(minutes, 2)}:${pad(seconds2, 2)}` : `${h}:${pad(minutes, 2)}`;
+  let timePortion = seconds3 || milliseconds ? `${h}:${pad(minutes, 2)}:${pad(seconds3, 2)}` : `${h}:${pad(minutes, 2)}`;
   if (milliseconds)
     timePortion += `.${pad(milliseconds, 3)}`;
   return `${timePortion + suffix2}, ${datePortion}`;
@@ -16293,7 +16293,7 @@ var ReviewComment = type({
   user: User.or("null")
 });
 var Created = type({ id: "number" });
-var CheckRuns = type({ check_runs: type({ id: "number" }).array() });
+var CheckRuns = type({ check_runs: type({ id: "number", started_at: "string | null" }).array() });
 var GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 var ThreadsData = type({
   data: {
@@ -16386,8 +16386,8 @@ function createGitHub(token, repo) {
     /** The ReviewPilot check on a commit. Needs Checks write on the token. */
     createCheck: (head, body) => call(Created, "POST", `${r}/check-runs`, { name: "ReviewPilot", head_sha: head, ...body }),
     updateCheck: (id, body) => call(Created, "PATCH", `${r}/check-runs/${id}`, body),
-    /** Ids of ReviewPilot checks on a commit that are still in progress. */
-    runningChecks: async (head) => (await call(CheckRuns, "GET", `${r}/commits/${head}/check-runs?check_name=ReviewPilot&status=in_progress&per_page=100`)).check_runs.map((c) => c.id),
+    /** ReviewPilot checks on a commit that are still in progress, with when they started. */
+    runningChecks: async (head) => (await call(CheckRuns, "GET", `${r}/commits/${head}/check-runs?check_name=ReviewPilot&status=in_progress&per_page=100`)).check_runs,
     react: (commentId, content) => call(done, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
     reply: (n, commentId, body) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
     review: (n, commitId, comments) => call(Created, "POST", `${r}/pulls/${n}/reviews`, {
@@ -17023,6 +17023,9 @@ var CHUNK_CHARS = 25e3;
 var MAX_VERIFY = 25;
 var FIND_AGENTS = 6;
 var VERIFY_AGENTS = 8;
+var seconds2 = (name, fallback) => (Number(process.env[name]) || fallback) * 1e3;
+var FIND_MS = seconds2("REVIEWPILOT_FIND_SECONDS", 240);
+var VERIFY_MS = seconds2("REVIEWPILOT_VERIFY_SECONDS", 180);
 async function review(input2) {
   const { config, diffs, previous, log: log2 } = input2;
   const changed = input2.scope.filter((d) => d.status !== "deleted").map((d) => d.path);
@@ -17057,7 +17060,7 @@ ${d.numbered}`).join("\n\n")}`
       user,
       submit: submitFindings(mine),
       maxTurns: 12,
-      deadline: Date.now() + 4 * 6e4,
+      deadline: Date.now() + FIND_MS,
       log: (line) => log2(`[part ${i + 1}] ${line}`)
     }).catch((e) => {
       log2(`[part ${i + 1}] find failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -17104,7 +17107,7 @@ ${patchOf(finding.file)}`
       ].filter(Boolean).join("\n\n"),
       submit: submitVerdict,
       maxTurns: 12,
-      deadline: Date.now() + 3 * 6e4,
+      deadline: Date.now() + VERIFY_MS,
       log: () => {
       }
     }).catch((e) => {
@@ -17173,6 +17176,7 @@ var settle = (finding, verdict) => ({
 
 // src/index.ts
 var MAX_DIFF_CHARS = 4e5;
+var STALE_CHECK_MS = 60 * 6e4;
 var GUIDANCE_CHARS = 1e4;
 var MAINTAINERS = /* @__PURE__ */ new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 var input = (name) => process.env[`INPUT_${name.toUpperCase()}`]?.trim() || void 0;
@@ -17261,8 +17265,10 @@ ${writeState(prev)}` : ""}`;
   putBack = () => restoreSummary("stopped");
   const checkId = await checkReady;
   if (checkId !== void 0) {
+    const cutoff = Date.now() - STALE_CHECK_MS;
     const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
-    for (const id of leftover.filter((id2) => id2 !== checkId)) {
+    const stale2 = leftover.filter((c) => c.id !== checkId && c.started_at !== null && Date.parse(c.started_at) < cutoff).map((c) => c.id);
+    for (const id of stale2) {
       await gh.updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: (/* @__PURE__ */ new Date()).toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } }).catch(() => void 0);
     }
   }

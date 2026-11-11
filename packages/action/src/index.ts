@@ -29,6 +29,8 @@ import {
 } from "./state.ts";
 
 const MAX_DIFF_CHARS = 400_000;
+/** An in-progress check older than this belongs to a run that died: no run lives this long. */
+const STALE_CHECK_MS = 60 * 60_000;
 const GUIDANCE_CHARS = 10_000;
 /** Who may run /review and whose replies can dismiss a finding (besides the PR author). */
 const MAINTAINERS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
@@ -157,10 +159,13 @@ async function main() {
 
   const checkId = await checkReady;
   // A run killed outright (SIGKILL, a crash) leaves its check in progress; the next run on
-  // the same commit closes those so the commit never shows a review that is not running.
+  // the same commit closes those. Only checks older than any run can live, so a review that
+  // is genuinely running at the same time (two workflow runs) keeps its check.
   if (checkId !== undefined) {
+    const cutoff = Date.now() - STALE_CHECK_MS;
     const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
-    for (const id of leftover.filter((id) => id !== checkId)) {
+    const stale = leftover.filter((c) => c.id !== checkId && c.started_at !== null && Date.parse(c.started_at) < cutoff).map((c) => c.id);
+    for (const id of stale) {
       await gh
         .updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: new Date().toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } })
         .catch(() => undefined);

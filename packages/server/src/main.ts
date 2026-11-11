@@ -117,6 +117,9 @@ function run(job: Job): Run {
         INPUT_GITHUB_TOKEN: token,
         INPUT_API_KEY: API_KEY,
         INPUT_BOT_LOGIN: login,
+        // No job timeout here, so agents get more time than in a workflow (see review.ts).
+        REVIEWPILOT_FIND_SECONDS: "480",
+        REVIEWPILOT_VERIFY_SECONDS: "300",
       },
     });
     // SIGTERM lets a review that is posting finish; one that hangs is killed after a grace period.
@@ -155,14 +158,24 @@ const queue = createQueue({ run, debounceMs: DEBOUNCE_MS, maxRuns: 3 });
 
 // Scheduled before the file is written: a run of the same PR finishing in between then sees
 // the pending job and leaves the file alone.
+/** The last job-file write per PR; each new write waits for it, so writes land in arrival order. */
+const writes = new Map<string, Promise<void>>();
+
 async function enqueue(incoming: Job) {
   const job = queue.schedule(incoming);
-  // Written whole to its own temp file, then renamed into place: neither a crash nor two
-  // deliveries for one PR at once can leave a torn job file. The last rename wins.
-  const file = jobFile(keyOf(job));
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  await writeFile(tmp, JSON.stringify(job));
-  await rename(tmp, file);
+  const key = keyOf(job);
+  // Written whole to its own temp file, then renamed into place, so a crash never leaves a
+  // torn file; chained per PR, so the file on disk is always the newest job the queue holds.
+  const write = async () => {
+    const file = jobFile(key);
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    await writeFile(tmp, JSON.stringify(job));
+    await rename(tmp, file);
+  };
+  const next = (writes.get(key) ?? Promise.resolve()).then(write, write);
+  writes.set(key, next);
+  await next;
+  if (writes.get(key) === next) writes.delete(key);
 }
 
 let lastDelivery = Date.now();

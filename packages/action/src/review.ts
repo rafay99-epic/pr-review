@@ -202,6 +202,14 @@ const MAX_VERIFY = 25;
 /** Agents running at once in each pass. Model calls are network-bound, so this sets the wall time. */
 const FIND_AGENTS = 6;
 const VERIFY_AGENTS = 8;
+/**
+ * Time each agent gets before it must submit. The defaults fit a workflow's job timeout; the
+ * server has no such cap and gives more (REVIEWPILOT_FIND_SECONDS, REVIEWPILOT_VERIFY_SECONDS),
+ * so a slow provider does not cost whole parts of the diff.
+ */
+const seconds = (name: string, fallback: number) => (Number(process.env[name]) || fallback) * 1000;
+const FIND_MS = seconds("REVIEWPILOT_FIND_SECONDS", 240);
+const VERIFY_MS = seconds("REVIEWPILOT_VERIFY_SECONDS", 180);
 
 export type ReviewInput = {
   find: Llm;
@@ -261,7 +269,7 @@ export async function review(
       user,
       submit: submitFindings(mine),
       maxTurns: 12,
-      deadline: Date.now() + 4 * 60_000,
+      deadline: Date.now() + FIND_MS,
       log: (line) => log(`[part ${i + 1}] ${line}`),
     }).catch((e: unknown) => {
       log(`[part ${i + 1}] find failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -322,7 +330,7 @@ export async function review(
         .join("\n\n"),
       submit: submitVerdict,
       maxTurns: 12,
-      deadline: Date.now() + 3 * 60_000,
+      deadline: Date.now() + VERIFY_MS,
       log: () => {},
     }).catch((e: unknown) => {
       log(`verify error: ${finding.file}:${finding.line} ${e instanceof Error ? e.message : String(e)}`);
