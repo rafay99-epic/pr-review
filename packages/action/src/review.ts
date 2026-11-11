@@ -65,7 +65,9 @@ function submitFindings(changed: readonly string[]): Submit<FindResult> {
       return {
         ok: true,
         value: {
-          checked,
+          // A forced answer means the agent ran out of budget, so its list is not trusted:
+          // none of the part's files count as reviewed and the next push reads them again.
+          checked: final ? new Set<string>() : checked,
           findings: out.findings.map((c) => ({
           file: c.file.replace(/^\.\//, ""),
           line: c.line,
@@ -184,9 +186,14 @@ export const focus = (diffs: readonly FileDiff[], seen: Readonly<Record<string, 
  * Whether an earlier finding needs the verifier again: only when its file, or a file its
  * evidence cites, is among the changed files. Otherwise its last verdict stands.
  */
-export const stale = (f: Pick<Finding, "file" | "evidence">, changed: ReadonlySet<string>) =>
-  // Evidence is model text ("path:line: code" by request), so any changed path in it counts.
-  changed.has(f.file) || f.evidence.some((e) => [...changed].some((path) => e.includes(path)));
+export function stale(f: Pick<Finding, "file" | "evidence">, changed: ReadonlySet<string>): boolean {
+  // Evidence is model text ("path:line: code" by request), so every path-like token in it is
+  // compared by whole segments: `b.ts` matches `src/b.ts`, `a.ts` never matches `a.tsx`.
+  const cited = [f.file, ...f.evidence.flatMap((e) => e.match(PATH_TOKEN) ?? [])].map((p) => p.replace(/^\.\//, ""));
+  return cited.some((c) => [...changed].some((p) => c === p || p.endsWith(`/${c}`) || c.endsWith(`/${p}`)));
+}
+
+const PATH_TOKEN = /[\w@.-]+(?:\/[\w@.-]+)*\.\w+/g;
 
 /** Diff characters per find agent. Smaller parts mean shorter contexts and closer reading. */
 const CHUNK_CHARS = 25_000;

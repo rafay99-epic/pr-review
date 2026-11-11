@@ -16293,6 +16293,7 @@ var ReviewComment = type({
   user: User.or("null")
 });
 var Created = type({ id: "number" });
+var CheckRuns = type({ check_runs: type({ id: "number" }).array() });
 var GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 var ThreadsData = type({
   data: {
@@ -16385,6 +16386,8 @@ function createGitHub(token, repo) {
     /** The ReviewPilot check on a commit. Needs Checks write on the token. */
     createCheck: (head, body) => call(Created, "POST", `${r}/check-runs`, { name: "ReviewPilot", head_sha: head, ...body }),
     updateCheck: (id, body) => call(Created, "PATCH", `${r}/check-runs/${id}`, body),
+    /** Ids of ReviewPilot checks on a commit that are still in progress. */
+    runningChecks: async (head) => (await call(CheckRuns, "GET", `${r}/commits/${head}/check-runs?check_name=ReviewPilot&status=in_progress&per_page=100`)).check_runs.map((c) => c.id),
     react: (commentId, content) => call(done, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
     reply: (n, commentId, body) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
     review: (n, commitId, comments) => call(Created, "POST", `${r}/pulls/${n}/reviews`, {
@@ -16612,7 +16615,7 @@ ${fence(f.evidence.map(clean))}
   ].join("\n");
 }
 var duration = (s) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
-var count = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.max(1, Math.round(n / 1e3))}k`;
+var count = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
 var tokens = (t) => {
   if (!t.prompt) return "no model calls";
   const share = Math.floor(t.cached / t.prompt * 100);
@@ -16907,7 +16910,9 @@ function submitFindings(changed) {
       return {
         ok: true,
         value: {
-          checked,
+          // A forced answer means the agent ran out of budget, so its list is not trusted:
+          // none of the part's files count as reviewed and the next push reads them again.
+          checked: final ? /* @__PURE__ */ new Set() : checked,
           findings: out.findings.map((c) => ({
             file: c.file.replace(/^\.\//, ""),
             line: c.line,
@@ -17008,10 +17013,11 @@ function chunk(diffs, size) {
   return parts;
 }
 var focus = (diffs, seen) => seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
-var stale = (f, changed) => (
-  // Evidence is model text ("path:line: code" by request), so any changed path in it counts.
-  changed.has(f.file) || f.evidence.some((e) => [...changed].some((path) => e.includes(path)))
-);
+function stale(f, changed) {
+  const cited = [f.file, ...f.evidence.flatMap((e) => e.match(PATH_TOKEN) ?? [])].map((p) => p.replace(/^\.\//, ""));
+  return cited.some((c) => [...changed].some((p) => c === p || p.endsWith(`/${c}`) || c.endsWith(`/${p}`)));
+}
+var PATH_TOKEN = /[\w@.-]+(?:\/[\w@.-]+)*\.\w+/g;
 var CHUNK_CHARS = 25e3;
 var MAX_VERIFY = 25;
 var FIND_AGENTS = 6;
@@ -17227,9 +17233,18 @@ async function main() {
     log.warn(`No ReviewPilot check, the token needs Checks write: ${String(e).slice(0, 200)}`);
     return void 0;
   });
+  if (checkId !== void 0) {
+    const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
+    for (const id of leftover.filter((id2) => id2 !== checkId)) {
+      await gh.updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: (/* @__PURE__ */ new Date()).toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } }).catch(() => void 0);
+    }
+  }
   const finishCheck = (body) => checkId === void 0 ? Promise.resolve() : gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...body }).then(() => void 0, (e) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
-  const restoreSummary = async (what) => {
-    if (dryRun || summaryId === void 0) return;
+  let restoring;
+  let stateSaved = false;
+  const restoreSummary = (what) => restoring ??= putBackSummary(what);
+  const putBackSummary = async (what) => {
+    if (dryRun || summaryId === void 0 || stateSaved) return;
     await finishCheck({
       conclusion: what === "stopped" ? "cancelled" : "neutral",
       output: { title: what === "stopped" ? "Stopped" : "Review failed", summary: what === "stopped" ? "A newer push or the time limit stopped this review." : "The review failed. Comment `/review` to retry." }
@@ -17429,6 +17444,7 @@ ${summaryBody(state, prev, outside, run2)}`);
       const body = summaryBody(state, prev, outside, run2);
       const saved = summaryId !== void 0 && await gh.editComment(summaryId, body).then(() => true, () => false);
       if (!saved) summaryId = (await gh.comment(number2, body)).id;
+      stateSaved = true;
       for (const old of summaries) {
         if (old.id !== summaryId) await gh.retire(old).catch((e) => log.warn(`Could not retire summary ${old.id}: ${String(e)}`));
       }
@@ -17460,7 +17476,11 @@ ${summaryBody(state, prev, outside, run2)}`);
       model: modelLabel
     });
   } catch (e) {
-    await restoreSummary("failed");
+    if (stateSaved) {
+      await finishCheck({ conclusion: "neutral", output: { title: "Posted, then a later step failed", summary: "The review and its summary are posted. A later step failed; see the logs." } });
+    } else {
+      await restoreSummary("failed");
+    }
     throw e;
   }
 }

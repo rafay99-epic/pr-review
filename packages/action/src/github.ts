@@ -27,6 +27,7 @@ const ReviewComment = type({
   user: User.or("null"),
 });
 const Created = type({ id: "number" });
+const CheckRuns = type({ check_runs: type({ id: "number" }).array() });
 const GraphQlEnvelope = type({ "errors?": type({ message: "string" }).array(), "data?": "unknown" });
 
 const ThreadsData = type({
@@ -160,6 +161,9 @@ export function createGitHub(token: string, repo: string) {
     /** The ReviewPilot check on a commit. Needs Checks write on the token. */
     createCheck: (head: string, body: CheckUpdate) => call(Created, "POST", `${r}/check-runs`, { name: "ReviewPilot", head_sha: head, ...body }),
     updateCheck: (id: number, body: CheckUpdate) => call(Created, "PATCH", `${r}/check-runs/${id}`, body),
+    /** Ids of ReviewPilot checks on a commit that are still in progress. */
+    runningChecks: async (head: string) =>
+      (await call(CheckRuns, "GET", `${r}/commits/${head}/check-runs?check_name=ReviewPilot&status=in_progress&per_page=100`)).check_runs.map((c) => c.id),
     react: (commentId: number, content: "eyes" | "+1") => call(done, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
     reply: (n: number, commentId: number, body: string) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
     review: (n: number, commitId: string, comments: InlineComment[]) =>

@@ -122,6 +122,16 @@ async function main() {
         log.warn(`No ReviewPilot check, the token needs Checks write: ${String(e).slice(0, 200)}`);
         return undefined;
       });
+  // A run killed outright (SIGKILL, a crash) leaves its check in progress; the next run on
+  // the same commit closes those so the commit never shows a review that is not running.
+  if (checkId !== undefined) {
+    const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
+    for (const id of leftover.filter((id) => id !== checkId)) {
+      await gh
+        .updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: new Date().toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } })
+        .catch(() => undefined);
+    }
+  }
   const finishCheck = (body: CheckUpdate) =>
     checkId === undefined
       ? Promise.resolve()
@@ -129,9 +139,13 @@ async function main() {
         .then(() => undefined, (e: unknown) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
 
   // Puts the previous summary back so a failed or stopped run never wipes the PR's history;
-  // on a first run, says what happened instead of leaving "reviewing..." up.
-  const restoreSummary = async (what: "failed" | "stopped") => {
-    if (dryRun || summaryId === undefined) return;
+  // on a first run, says what happened instead of leaving "reviewing..." up. Runs once, even
+  // when a stop and a failure both reach it. Never after the new summary is saved.
+  let restoring: Promise<void> | undefined;
+  let stateSaved = false;
+  const restoreSummary = (what: "failed" | "stopped") => (restoring ??= putBackSummary(what));
+  const putBackSummary = async (what: "failed" | "stopped") => {
+    if (dryRun || summaryId === undefined || stateSaved) return;
     await finishCheck({
       conclusion: what === "stopped" ? "cancelled" : "neutral",
       output: { title: what === "stopped" ? "Stopped" : "Review failed", summary: what === "stopped" ? "A newer push or the time limit stopped this review." : "The review failed. Comment `/review` to retry." },
@@ -369,6 +383,7 @@ async function main() {
       const body = summaryBody(state, prev, outside, run);
       const saved = summaryId !== undefined && (await gh.editComment(summaryId, body).then(() => true, () => false));
       if (!saved) summaryId = (await gh.comment(number, body)).id;
+      stateSaved = true;
       for (const old of summaries) {
         if (old.id !== summaryId) await gh.retire(old).catch((e: unknown) => log.warn(`Could not retire summary ${old.id}: ${String(e)}`));
       }
@@ -407,7 +422,12 @@ async function main() {
       model: modelLabel,
     });
   } catch (e) {
-    await restoreSummary("failed");
+    // After the new summary is saved, the review is posted: only the check says a later step failed.
+    if (stateSaved) {
+      await finishCheck({ conclusion: "neutral", output: { title: "Posted, then a later step failed", summary: "The review and its summary are posted. A later step failed; see the logs." } });
+    } else {
+      await restoreSummary("failed");
+    }
     throw e;
   }
 }

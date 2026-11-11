@@ -198,6 +198,10 @@ test("an earlier finding is re-verified only when its file or cited code changed
   assert.equal(stale(f, new Set(["a.ts"])), true);
   assert.equal(stale(f, new Set(["lib/b.ts"])), true);
   assert.equal(stale(f, new Set(["c.ts"])), false);
+  // Whole path segments: a short citation matches its full path, never a longer file name.
+  assert.equal(stale({ file: "x.ts", evidence: ["b.ts:3: y()"] }, new Set(["src/b.ts"])), true);
+  assert.equal(stale({ file: "x.ts", evidence: ["./src/b.ts:3: y()"] }, new Set(["src/b.ts"])), true);
+  assert.equal(stale({ file: "x.ts", evidence: ["src/a.tsx:3: y()"] }, new Set(["a.ts"])), false);
 });
 
 test("the check passes only at 5/5 and annotates each open finding", () => {

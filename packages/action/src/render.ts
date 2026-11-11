@@ -53,7 +53,7 @@ export type Run = {
 
 export const duration = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
 
-const count = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.max(1, Math.round(n / 1e3))}k`);
+const count = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
 
 const tokens = (t: Run["tokens"]) => {
   if (!t.prompt) return "no model calls";
