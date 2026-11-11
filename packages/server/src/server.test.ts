@@ -10,14 +10,14 @@ const pr = (over: object = {}) => ({
   action: "synchronize",
   installation,
   repository,
-  pull_request: { number: 3, draft: false, user: { login: "me" }, head: { repo: { full_name: "me/app" } }, ...over },
+  pull_request: { number: 3, draft: false, user: { login: "me", type: "User" }, head: { repo: { full_name: "me/app" } }, ...over },
 });
-const comment = (body: string, login = "me") => ({
+const comment = (body: string, association = "OWNER") => ({
   action: "created",
   installation,
   repository,
   issue: { number: 3, state: "open", pull_request: {} },
-  comment: { body, user: { login } },
+  comment: { body, author_association: association, user: { login: "me" } },
 });
 
 test("verify accepts only GitHub's HMAC of the exact body", () => {
@@ -29,16 +29,18 @@ test("verify accepts only GitHub's HMAC of the exact body", () => {
   assert.equal(verify("s3cret", body, undefined), false);
 });
 
-test("toJob keeps the old workflow's gate: owner PRs and owner /review comments", () => {
+test("toJob reviews non-draft, non-fork PRs by people, and /review from maintainers", () => {
   const all = new Set<string>();
   assert.deepEqual(toJob("pull_request", pr(), all), { repo: "me/app", number: 3, installation: 7, event: "pull_request", payload: pr(), debounce: true });
   assert.equal(toJob("pull_request", pr({ draft: true }), all), undefined);
-  assert.equal(toJob("pull_request", pr({ user: { login: "someone" } }), all), undefined);
+  assert.equal(toJob("pull_request", pr({ user: { login: "teammate", type: "User" } }), all)?.repo, "me/app");
+  assert.equal(toJob("pull_request", pr({ user: { login: "dependabot[bot]", type: "Bot" } }), all), undefined);
   assert.equal(toJob("pull_request", pr({ head: { repo: { full_name: "fork/app" } } }), all), undefined);
   assert.equal(toJob("pull_request", { ...pr(), action: "closed" }, all), undefined);
   assert.equal(toJob("issue_comment", comment("/review"), all)?.debounce, false);
   assert.equal(toJob("issue_comment", comment("/reviewer"), all), undefined);
-  assert.equal(toJob("issue_comment", comment("/review", "someone"), all), undefined);
+  assert.equal(toJob("issue_comment", comment("/review", "COLLABORATOR"), all)?.repo, "me/app");
+  assert.equal(toJob("issue_comment", comment("/review", "CONTRIBUTOR"), all), undefined);
   assert.equal(toJob("pull_request", pr(), new Set(["me/other"])), undefined);
   assert.equal(toJob("pull_request", pr(), new Set(["me/app"]))?.repo, "me/app");
   assert.equal(toJob("ping", {}, all), undefined);
