@@ -136,9 +136,12 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
   return lines.join("\n");
 }
 
+/** How a summary in progress starts. A stopped run never restores one of these. */
+export const PROGRESS = "## ReviewPilot: reviewing";
+
 export const progressBody = (head: string, prev: string | undefined) =>
   [
-    `## ReviewPilot: reviewing ${head.slice(0, 7)}`,
+    `${PROGRESS} ${head.slice(0, 7)}`,
     "",
     "Reading the diff and the code around it, then re-checking each finding. This usually takes a few minutes.",
     SUMMARY_TAG,

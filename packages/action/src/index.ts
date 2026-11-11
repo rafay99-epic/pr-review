@@ -10,7 +10,7 @@ import { checkoutPr, diff, fetchRef, readAt } from "./git.ts";
 import { type CheckUpdate, createGitHub, type InlineComment, type Thread } from "./github.ts";
 import { createLlm } from "./llm.ts";
 import { createLog, seconds } from "./log.ts";
-import { bySeverity, checkResult, inlineBody, progressBody, summaryBody } from "./render.ts";
+import { bySeverity, checkResult, inlineBody, PROGRESS, progressBody, summaryBody } from "./render.ts";
 import { dedupe, focus, pool, review, settle } from "./review.ts";
 import {
   diffHash,
@@ -151,7 +151,9 @@ async function main() {
       output: { title: what === "stopped" ? "Stopped" : "Review failed", summary: what === "stopped" ? "A newer push or the time limit stopped this review." : "The review failed. Comment `/review` to retry." },
     });
     const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-    const restore = existing?.id === summaryId ? existing.body : undefined;
+    // A "reviewing" summary left by a killed run is not worth restoring: it would claim a
+    // review that is not running. The stopped or failed note below carries the same state.
+    const restore = existing?.id === summaryId && !existing.body.startsWith(PROGRESS) ? existing.body : undefined;
     const why = what === "stopped"
       ? "A newer push or the time limit stopped it."
       : process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";

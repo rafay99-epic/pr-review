@@ -16685,8 +16685,9 @@ function summaryBody(state, prev, outside, run2) {
   );
   return lines.join("\n");
 }
+var PROGRESS = "## ReviewPilot: reviewing";
 var progressBody = (head, prev) => [
-  `## ReviewPilot: reviewing ${head.slice(0, 7)}`,
+  `${PROGRESS} ${head.slice(0, 7)}`,
   "",
   "Reading the diff and the code around it, then re-checking each finding. This usually takes a few minutes.",
   SUMMARY_TAG,
@@ -17250,7 +17251,7 @@ async function main() {
       output: { title: what === "stopped" ? "Stopped" : "Review failed", summary: what === "stopped" ? "A newer push or the time limit stopped this review." : "The review failed. Comment `/review` to retry." }
     });
     const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
-    const restore = existing?.id === summaryId ? existing.body : void 0;
+    const restore = existing?.id === summaryId && !existing.body.startsWith(PROGRESS) ? existing.body : void 0;
     const why = what === "stopped" ? "A newer push or the time limit stopped it." : process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
     const body = restore ?? `## ReviewPilot: review ${what} for ${pr.head.sha.slice(0, 7)}
 
