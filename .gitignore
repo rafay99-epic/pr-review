@@ -6,3 +6,4 @@ node_modules/
 .mocks/
 .turbo/
 apps/web/dist/
+packages/server/dist/

@@ -11,8 +11,9 @@ import { createGitHub, type InlineComment, type Thread } from "./github.ts";
 import { createLlm } from "./llm.ts";
 import { createLog } from "./log.ts";
 import { bySeverity, inlineBody, progressBody, summaryBody } from "./render.ts";
-import { dedupe, pool, review, settle } from "./review.ts";
+import { dedupe, focus, pool, review, settle } from "./review.ts";
 import {
+  diffHash,
   FINDING_TAG,
   fingerprint,
   lastMarker,
@@ -39,6 +40,16 @@ const Event = type({
   "pull_request?": { number: "number" },
   "issue?": { number: "number", "pull_request?": "unknown" },
   "comment?": { id: "number", body: "string", author_association: "string", user: { login: "string" } },
+});
+
+/**
+ * A newer push makes this run stale, and the server stops it with SIGTERM. Before posting
+ * that is safe: the summary still carries the previous state, so the next run picks up from
+ * it. Once posting starts the run finishes, or the next one would post the same comments.
+ */
+let posting = false;
+process.on("SIGTERM", () => {
+  if (!posting) process.exit(143);
 });
 
 async function main() {
@@ -154,7 +165,10 @@ async function main() {
     const llm = (m: string) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates, verified, failedParts, parts } = await log.phase("Review", () =>
+    // A push re-reads only files whose diff moved since the last review; `/review` reads everything.
+    const seen = comment ? undefined : prev?.files;
+    const scope = focus(diffs, seen);
+    const { checked, candidates, verified, failedParts, parts, reviewed } = await log.phase("Review", () =>
       review({
         find,
         verify,
@@ -164,6 +178,7 @@ async function main() {
         guidance,
         pr: { title: pr.title, body: pr.body ?? "" },
         diffs,
+        scope,
         previous,
         log: log.line,
       }),
@@ -209,7 +224,14 @@ async function main() {
     });
 
     const open = findings.filter((f) => f.status === "open");
-    const state: State = { head: pr.head.sha, score: score(open), findings };
+    const done = new Set(reviewed);
+    const files = Object.fromEntries(
+      diffs.flatMap((d) => {
+        const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
+        return hash ? [[d.path, hash]] : [];
+      }),
+    );
+    const state: State = { head: pr.head.sha, score: score(open), findings, files };
 
     // New findings go inline where the diff allows; the rest go to the summary.
     const byPath = new Map(diffs.map((d) => [d.path, d]));
@@ -235,6 +257,7 @@ async function main() {
       head: pr.head.sha,
       model: modelLabel,
       files: diffs.length,
+      reviewed: scope.length,
       candidates,
       verified,
       seconds: Math.round((Date.now() - started) / 1000),
@@ -251,6 +274,7 @@ async function main() {
       return;
     }
 
+    posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {
         const posted = await gh.review(number, pr.head.sha, inline).then(() => true, (e: unknown) => {
@@ -310,7 +334,8 @@ async function main() {
     if (!dryRun && summaryId !== undefined) {
       const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
       const restore = existing?.id === summaryId ? existing.body : undefined;
-      const body = restore ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}\n\nSee the [workflow run](${runUrl}). Comment \`/review\` to retry.\n${SUMMARY_TAG}${prev ? `\n${writeState(prev)}` : ""}`;
+      const where = process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
+      const body = restore ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}\n\n${where} Comment \`/review\` to retry.\n${SUMMARY_TAG}${prev ? `\n${writeState(prev)}` : ""}`;
       await gh.editComment(summaryId, body).catch(() => undefined);
     }
     throw e;

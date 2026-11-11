@@ -1,0 +1,33 @@
+# ReviewPilot server on Fly.io. One machine with a volume for warm clones and pending jobs.
+# The server exits when idle (machine stops, nothing billed but the volume) and Fly starts it
+# again on the next webhook. Proxy auto-stop stays off: it would cut reviews running in the
+# background. Secrets (fly secrets set): WEBHOOK_SECRET, APP_ID, PRIVATE_KEY, REVIEWPILOT_API_KEY.
+app = "reviewpilot-rafay"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = 60
+
+[env]
+  DATA_DIR = "/data"
+  # Comma-separated owner/repo list the server reviews; empty means every installed repo.
+  REPOS = "rafay99-epic/Lumo"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[restart]]
+  policy = "on-failure"
+  retries = 5
+
+[mounts]
+  source = "reviewpilot_data"
+  destination = "/data"
+  initial_size = "5gb"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"

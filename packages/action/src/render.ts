@@ -38,6 +38,8 @@ export type Run = {
   head: string;
   model: string;
   files: number;
+  /** Files the find pass read; the rest had the same diff as at the last review. */
+  reviewed: number;
   candidates: number;
   verified: number;
   seconds: number;
@@ -79,7 +81,7 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
   const time = run.seconds >= 60 ? `${Math.floor(run.seconds / 60)}m ${run.seconds % 60}s` : `${run.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.files} files · ${run.candidates} candidates, ${run.verified} checks · ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files changed since last review`} · ${run.candidates} candidates, ${run.verified} checks · ${time}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state),
   );

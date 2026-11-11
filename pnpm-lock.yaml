@@ -229,6 +229,22 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  packages/server:
+    dependencies:
+      arktype:
+        specifier: ^2.1.20
+        version: 2.2.9
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.2
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
 packages:
 
   '@ark/schema@0.56.8':

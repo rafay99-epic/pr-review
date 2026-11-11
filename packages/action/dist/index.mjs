@@ -16006,7 +16006,12 @@ var TrackedSchema = FindingSchema.and({
   /** Review comment id of the inline comment, once posted. */
   "commentId?": "number"
 });
-var StateSchema = type({ head: "string", score: "1 | 2 | 3 | 4 | 5", findings: TrackedSchema.array() });
+var StateSchema = type({
+  head: "string",
+  score: "1 | 2 | 3 | 4 | 5",
+  findings: TrackedSchema.array(),
+  "files?": "Record<string, string>"
+});
 function score(findings) {
   const critical = findings.filter((f) => f.severity === "critical").length;
   if (critical >= 2) return 1;
@@ -16019,6 +16024,7 @@ function fingerprint(f) {
   return createHash("sha1").update(`${f.file}
 ${title}`).digest("hex").slice(0, 12);
 }
+var diffHash = (numbered) => createHash("sha1").update(numbered).digest("hex").slice(0, 12);
 function sameIssue(a, b) {
   return a.file === b.file && Math.abs(a.line - b.line) <= 2;
 }
@@ -16605,7 +16611,7 @@ function summaryBody(state, prev, outside, run2) {
   const time = run2.seconds >= 60 ? `${Math.floor(run2.seconds / 60)}m ${run2.seconds % 60}s` : `${run2.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.files} files \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files changed since last review`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state)
   );
@@ -16933,11 +16939,12 @@ function chunk(diffs, size) {
   if (current.length) parts.push(current);
   return parts;
 }
+var focus = (diffs, seen) => seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
 var CHUNK_CHARS = 25e3;
 var MAX_VERIFY = 25;
 async function review(input2) {
   const { config, diffs, previous, log: log2 } = input2;
-  const changed = diffs.filter((d) => d.status !== "deleted").map((d) => d.path);
+  const changed = input2.scope.filter((d) => d.status !== "deleted").map((d) => d.path);
   const open = previous.filter((p) => p.status === "open");
   const dismissed = previous.filter((p) => p.status === "dismissed");
   const history = [
@@ -16945,8 +16952,8 @@ async function review(input2) {
     dismissed.length && "Dismissed by the author (do not raise again):\n" + dismissed.map((p) => `- ${p.file}:${p.line} ${p.title}`).join("\n")
   ].filter(Boolean);
   const all = diffs.map((d) => `- ${d.path} (${d.status})`).join("\n");
-  const chunks = chunk(diffs, CHUNK_CHARS);
-  log2(`find: ${changed.length} files in ${chunks.length} parts`);
+  const chunks = chunk(input2.scope, CHUNK_CHARS);
+  log2(`find: ${changed.length} of ${diffs.length} files in ${chunks.length} parts`);
   const parts = await pool(chunks, 3, async (part, i) => {
     const mine = part.filter((d) => d.status !== "deleted").map((d) => d.path);
     const user = [
@@ -16976,6 +16983,7 @@ ${d.numbered}`).join("\n\n")}`
     });
   });
   const failedParts = parts.filter((p) => p === void 0).length;
+  const reviewed = chunks.flatMap((part, i) => parts[i] ? part.map((d) => d.path) : []);
   const ruleIds = new Set(input2.rules.map((r) => r.id));
   const candidates = parts.flatMap((p) => p ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input2.root, c.file).then(Boolean)));
@@ -17017,7 +17025,7 @@ ${patchOf(finding.file)}`
     if (verdict) log2(`verify ${verdict.verdict}: ${finding.file}:${finding.line} ${finding.title} (${verdict.reason.slice(0, 160)})`);
     return { finding, ...verdict ? { verdict } : {}, ...prev ? { previous: prev } : {} };
   });
-  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed };
 }
 var Groups = type({ duplicates: "string[][]" });
 async function dedupe(llm, root, findings, known, log2) {
@@ -17084,6 +17092,10 @@ var Event = type({
   "pull_request?": { number: "number" },
   "issue?": { number: "number", "pull_request?": "unknown" },
   "comment?": { id: "number", body: "string", author_association: "string", user: { login: "string" } }
+});
+var posting = false;
+process.on("SIGTERM", () => {
+  if (!posting) process.exit(143);
 });
 async function main() {
   const started = Date.now();
@@ -17172,7 +17184,9 @@ ${text}` : "";
     const llm = (m) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const { checked, candidates, verified, failedParts, parts } = await log.phase(
+    const seen = comment ? void 0 : prev?.files;
+    const scope2 = focus(diffs, seen);
+    const { checked, candidates, verified, failedParts, parts, reviewed } = await log.phase(
       "Review",
       () => review({
         find,
@@ -17183,6 +17197,7 @@ ${text}` : "";
         guidance,
         pr: { title: pr.title, body: pr.body ?? "" },
         diffs,
+        scope: scope2,
         previous,
         log: log.line
       })
@@ -17217,7 +17232,14 @@ ${text}` : "";
       return { findings: findings2, fresh: fresh2, overCap: overCap2 };
     });
     const open = findings.filter((f) => f.status === "open");
-    const state = { head: pr.head.sha, score: score(open), findings };
+    const done = new Set(reviewed);
+    const files = Object.fromEntries(
+      diffs.flatMap((d) => {
+        const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
+        return hash ? [[d.path, hash]] : [];
+      })
+    );
+    const state = { head: pr.head.sha, score: score(open), findings, files };
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline = [];
     const outside = [];
@@ -17240,6 +17262,7 @@ ${text}` : "";
       head: pr.head.sha,
       model: modelLabel,
       files: diffs.length,
+      reviewed: scope2.length,
       candidates,
       verified,
       seconds: Math.round((Date.now() - started) / 1e3),
@@ -17256,6 +17279,7 @@ ${c.body}`);
 ${summaryBody(state, prev, outside, run2)}`);
       return;
     }
+    posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {
         const posted = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
@@ -17305,9 +17329,10 @@ ${summaryBody(state, prev, outside, run2)}`);
     if (!dryRun && summaryId !== void 0) {
       const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
       const restore = existing?.id === summaryId ? existing.body : void 0;
+      const where = process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
       const body = restore ?? `## ReviewPilot: review failed for ${pr.head.sha.slice(0, 7)}
 
-See the [workflow run](${runUrl}). Comment \`/review\` to retry.
+${where} Comment \`/review\` to retry.
 ${SUMMARY_TAG}${prev ? `
 ${writeState(prev)}` : ""}`;
       await gh.editComment(summaryId, body).catch(() => void 0);

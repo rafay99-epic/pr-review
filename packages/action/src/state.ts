@@ -27,8 +27,16 @@ const TrackedSchema = FindingSchema.and({
   "commentId?": "number",
 });
 
-/** The state stored in the summary comment. It is read back as untrusted input. */
-const StateSchema = type({ head: "string", score: "1 | 2 | 3 | 4 | 5", findings: TrackedSchema.array() });
+/**
+ * The state stored in the summary comment. It is read back as untrusted input. `files` maps
+ * each reviewed path to the diffHash it had then, so a push only re-reads what changed.
+ */
+const StateSchema = type({
+  head: "string",
+  score: "1 | 2 | 3 | 4 | 5",
+  findings: TrackedSchema.array(),
+  "files?": "Record<string, string>",
+});
 
 export type Finding = typeof FindingSchema.infer;
 export type Tracked = typeof TrackedSchema.infer;
@@ -52,6 +60,9 @@ export function fingerprint(f: Pick<Finding, "file" | "title">): string {
   const title = f.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   return createHash("sha1").update(`${f.file}\n${title}`).digest("hex").slice(0, 12);
 }
+
+/** Hash of one file's PR diff: unchanged across pushes means nothing new to find in it. */
+export const diffHash = (numbered: string) => createHash("sha1").update(numbered).digest("hex").slice(0, 12);
 
 /** A new finding within two lines of an earlier one in the same file is treated as the same finding. */
 export function sameIssue(a: Pick<Finding, "file" | "line">, b: Pick<Finding, "file" | "line">): boolean {

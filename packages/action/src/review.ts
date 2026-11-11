@@ -9,7 +9,7 @@ import type { Config, Rule } from "./config.ts";
 import type { FileDiff } from "./diff.ts";
 import type { Llm, ToolSpec } from "./llm.ts";
 import { bySeverity } from "./render.ts";
-import { type Finding, SEVERITIES, type Severity, type Tracked } from "./state.ts";
+import { diffHash, type Finding, SEVERITIES, type Severity, type Tracked } from "./state.ts";
 import { inside } from "./tools.ts";
 
 const Severity = type.enumerated(...SEVERITIES);
@@ -167,6 +167,13 @@ export function chunk(diffs: readonly FileDiff[], size: number): FileDiff[][] {
   return parts;
 }
 
+/**
+ * The files the find pass reads: those whose diff changed since the last review (`seen` maps
+ * path to diffHash). With no record, every file is read.
+ */
+export const focus = (diffs: readonly FileDiff[], seen: Readonly<Record<string, string>> | undefined) =>
+  seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
+
 /** Diff characters per find agent. Smaller parts mean shorter contexts and closer reading. */
 const CHUNK_CHARS = 25_000;
 /** Candidates sent to verification, most severe first. */
@@ -181,6 +188,8 @@ export type ReviewInput = {
   guidance: string;
   pr: { title: string; body: string };
   diffs: readonly FileDiff[];
+  /** The part of `diffs` the find pass reads (see focus); earlier findings are re-checked against all of `diffs`. */
+  scope: readonly FileDiff[];
   /** Findings from earlier runs: open ones are re-checked, dismissed ones are not raised again. */
   previous: readonly Tracked[];
   log: (line: string) => void;
@@ -191,9 +200,9 @@ export type Checked = { finding: Finding; verdict?: VerdictResult; previous?: Tr
 
 export async function review(
   input: ReviewInput,
-): Promise<{ checked: Checked[]; candidates: number; verified: number; failedParts: number; parts: number }> {
+): Promise<{ checked: Checked[]; candidates: number; verified: number; failedParts: number; parts: number; reviewed: string[] }> {
   const { config, diffs, previous, log } = input;
-  const changed = diffs.filter((d) => d.status !== "deleted").map((d) => d.path);
+  const changed = input.scope.filter((d) => d.status !== "deleted").map((d) => d.path);
   const open = previous.filter((p) => p.status === "open");
   const dismissed = previous.filter((p) => p.status === "dismissed");
 
@@ -206,8 +215,8 @@ export async function review(
   ].filter(Boolean);
 
   const all = diffs.map((d) => `- ${d.path} (${d.status})`).join("\n");
-  const chunks = chunk(diffs, CHUNK_CHARS);
-  log(`find: ${changed.length} files in ${chunks.length} parts`);
+  const chunks = chunk(input.scope, CHUNK_CHARS);
+  log(`find: ${changed.length} of ${diffs.length} files in ${chunks.length} parts`);
 
   const parts = await pool(chunks, 3, async (part, i) => {
     const mine = part.filter((d) => d.status !== "deleted").map((d) => d.path);
@@ -235,6 +244,8 @@ export async function review(
     });
   });
   const failedParts = parts.filter((p) => p === undefined).length;
+  // Files in parts that finished; a failed part's files are read again on the next run.
+  const reviewed = chunks.flatMap((part, i) => (parts[i] ? part.map((d) => d.path) : []));
   // A candidate must point at a file that exists in the checkout (a model steered by the PR
   // could otherwise put arbitrary text in a link), and may only cite rules that exist.
   const ruleIds = new Set(input.rules.map((r) => r.id));
@@ -286,7 +297,7 @@ export async function review(
     return { finding, ...(verdict ? { verdict } : {}), ...(prev ? { previous: prev } : {}) };
   });
 
-  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed };
 }
 
 const Groups = type({ duplicates: "string[][]" });

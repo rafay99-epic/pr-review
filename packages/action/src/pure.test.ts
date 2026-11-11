@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, type FileDiff, parseDiff, unquote } from "./diff.ts";
 import { clean } from "./render.ts";
-import { chunk, settle } from "./review.ts";
-import { fingerprint, readState, score, STATE_BUDGET, writeState } from "./state.ts";
+import { chunk, focus, settle } from "./review.ts";
+import { diffHash, fingerprint, readState, score, STATE_BUDGET, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -149,4 +149,17 @@ test("config rejects unknown keys so typos are reported", () => {
   const { config, warning } = loadConfig("review:\n  min_severty: major\n");
   assert.deepEqual(config, DEFAULTS);
   assert.match(warning ?? "", /min_severty/);
+});
+
+test("focus re-reads only files whose diff changed since the last review", () => {
+  const file = (path: string, numbered: string): FileDiff => ({ path, status: "modified", commentable: new Set(), hunkOf: new Map(), numbered });
+  const diffs = [file("a.ts", "1 + a"), file("b.ts", "1 + b"), file("c.ts", "1 + c")];
+  const seen = { "a.ts": diffHash("1 + a"), "b.ts": diffHash("1 + old b") };
+  assert.deepEqual(focus(diffs, seen).map((d) => d.path), ["b.ts", "c.ts"]);
+  assert.deepEqual(focus(diffs, undefined).map((d) => d.path), ["a.ts", "b.ts", "c.ts"]);
+});
+
+test("reviewed file hashes survive the state round trip", () => {
+  const state = { head: "abc", score: 5 as const, findings: [], files: { "a.ts": diffHash("x") } };
+  assert.deepEqual(readState(writeState(state))?.files, state.files);
 });
