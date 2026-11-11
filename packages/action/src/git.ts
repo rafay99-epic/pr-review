@@ -19,7 +19,10 @@ export async function checkoutPr(root: string, pr: number, head: string, base: {
   if ((await git(root, "rev-parse", "--is-shallow-repository")).trim() === "true") {
     await git(root, "fetch", "--no-tags", "--unshallow", "origin");
   }
-  await git(root, "fetch", "--no-tags", "origin", `+refs/pull/${pr}/head:refs/reviewpilot/head`, `+refs/heads/${base.ref}:refs/reviewpilot/base`);
+  await git(root, "fetch", "--no-tags", "origin", `+refs/pull/${pr}/head:refs/reviewpilot/head`);
+  // Separate, and allowed to fail: a deleted base branch must not stop a review whose base
+  // commit is already in the clone. merge-base below fails if it is not.
+  await git(root, "fetch", "--no-tags", "origin", `+refs/heads/${base.ref}:refs/reviewpilot/base`).catch(() => undefined);
   await git(root, "checkout", "--quiet", "--force", "--detach", head);
   return (await git(root, "merge-base", base.sha, head)).trim();
 }

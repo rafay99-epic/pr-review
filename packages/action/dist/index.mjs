@@ -16074,6 +16074,14 @@ function writeState(full) {
 var SUMMARY_TAG = "<!-- reviewpilot:summary -->";
 var findingTag = (fp) => `<!-- reviewpilot:fp=${fp} -->`;
 var FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/g;
+function postedOnHead(comments, head, ours) {
+  const posted = /* @__PURE__ */ new Map();
+  for (const c of comments) {
+    const fp = lastMarker(c.body, FINDING_TAG);
+    if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === head) posted.set(fp, c.id);
+  }
+  return posted;
+}
 
 // src/config.ts
 var Severity = type.enumerated(...SEVERITIES);
@@ -16231,7 +16239,8 @@ async function checkoutPr(root, pr, head, base) {
   if ((await git(root, "rev-parse", "--is-shallow-repository")).trim() === "true") {
     await git(root, "fetch", "--no-tags", "--unshallow", "origin");
   }
-  await git(root, "fetch", "--no-tags", "origin", `+refs/pull/${pr}/head:refs/reviewpilot/head`, `+refs/heads/${base.ref}:refs/reviewpilot/base`);
+  await git(root, "fetch", "--no-tags", "origin", `+refs/pull/${pr}/head:refs/reviewpilot/head`);
+  await git(root, "fetch", "--no-tags", "origin", `+refs/heads/${base.ref}:refs/reviewpilot/base`).catch(() => void 0);
   await git(root, "checkout", "--quiet", "--force", "--detach", head);
   return (await git(root, "merge-base", base.sha, head)).trim();
 }
@@ -16998,7 +17007,7 @@ ${d.numbered}`).join("\n\n")}`
   const failedParts = parts.filter((p) => p === void 0).length;
   const reviewed = chunks.flatMap((part, i) => {
     const p = parts[i];
-    return p ? part.filter((d) => d.status === "deleted" || p.checked.has(d.path)).map((d) => d.path) : [];
+    return p ? part.filter((d) => p.checked.has(d.path)).map((d) => d.path) : [];
   });
   const ruleIds = new Set(input2.rules.map((r) => r.id));
   const candidates = parts.flatMap((p) => p?.findings ?? []);
@@ -17272,17 +17281,11 @@ ${text}` : "";
       if (hash) files[d.path] = hash;
     }
     const state = { head: pr.head.sha, score: score(open), findings, files };
-    const posted = /* @__PURE__ */ new Map();
-    if (!dryRun && fresh.length) {
-      const comments = await gh.reviewComments(number2).catch((e) => {
-        log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
-        return [];
-      });
-      for (const c of comments) {
-        const fp = lastMarker(c.body, FINDING_TAG);
-        if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === pr.head.sha) posted.set(fp, c.id);
-      }
-    }
+    const comments = !dryRun && fresh.length ? await gh.reviewComments(number2).catch((e) => {
+      log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
+      return [];
+    }) : [];
+    const posted = postedOnHead(comments, pr.head.sha, ours);
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline = [];
     const outside = [];
@@ -17336,9 +17339,9 @@ ${summaryBody(state, prev, outside, run2)}`);
           return false;
         });
         if (posted2) {
-          const comments = await gh.reviewComments(number2).catch(() => []);
+          const comments2 = await gh.reviewComments(number2).catch(() => []);
           for (const f of fresh) {
-            const id = comments.findLast((c) => !c.in_reply_to_id && ours(c.user?.login) && lastMarker(c.body, FINDING_TAG) === f.fp)?.id;
+            const id = comments2.findLast((c) => !c.in_reply_to_id && ours(c.user?.login) && lastMarker(c.body, FINDING_TAG) === f.fp)?.id;
             if (id !== void 0) f.commentId = id;
           }
         } else {

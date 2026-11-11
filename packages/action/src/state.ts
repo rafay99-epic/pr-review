@@ -4,6 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { type } from "arktype";
+import type { ReviewComment } from "./github.ts";
 
 export const SEVERITIES = ["critical", "major", "minor"] as const;
 export type Severity = (typeof SEVERITIES)[number];
@@ -133,3 +134,17 @@ export function writeState(full: State): string {
 export const SUMMARY_TAG = "<!-- reviewpilot:summary -->";
 export const findingTag = (fp: string) => `<!-- reviewpilot:fp=${fp} -->`;
 export const FINDING_TAG = /<!-- reviewpilot:fp=([0-9a-f]{12}) -->/g;
+
+/**
+ * Finding fingerprint to comment id, for findings ReviewPilot already posted inline on this
+ * head commit. A run killed mid-post leaves some; the next run reuses them instead of posting
+ * again. Replies, other authors and comments on older commits never count.
+ */
+export function postedOnHead(comments: readonly ReviewComment[], head: string, ours: (login: string | undefined) => boolean) {
+  const posted = new Map<string, number>();
+  for (const c of comments) {
+    const fp = lastMarker(c.body, FINDING_TAG);
+    if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === head) posted.set(fp, c.id);
+  }
+  return posted;
+}

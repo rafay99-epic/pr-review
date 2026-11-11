@@ -5,7 +5,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -35,6 +35,8 @@ const IDLE_EXIT_MS = Number(process.env.IDLE_EXIT_MS ?? 10 * 60_000);
 const MAX_RUN_MS = 50 * 60_000;
 /** How long a stopped review may take to finish posting before it is killed outright. */
 const KILL_AFTER_MS = 2 * 60_000;
+/** Shutdown waits this long for reviews to exit; fly.toml's kill_timeout must be longer. */
+const DRAIN_MS = KILL_AFTER_MS + 10_000;
 const MAX_BODY = 25 * 1024 * 1024;
 
 const SavedJob = type({
@@ -122,7 +124,10 @@ const queue = createQueue({ run, debounceMs: DEBOUNCE_MS, maxRuns: 3 });
 // the pending job and leaves the file alone.
 async function enqueue(job: Job) {
   queue.schedule(job);
-  await writeFile(jobFile(keyOf(job)), JSON.stringify(job));
+  // Written whole, then renamed into place: a crash mid-write never leaves a torn job file.
+  const file = jobFile(keyOf(job));
+  await writeFile(`${file}.tmp`, JSON.stringify(job));
+  await rename(`${file}.tmp`, file);
 }
 
 let lastDelivery = Date.now();
@@ -161,9 +166,13 @@ async function start() {
   for (const dir of ["jobs", "events", "repos"]) await mkdir(join(DATA, dir), { recursive: true });
   // Jobs left from before a restart run first, without waiting for a debounce.
   for (const name of await readdir(join(DATA, "jobs"))) {
-    const saved = SavedJob(JSON.parse(await readFile(join(DATA, "jobs", name), "utf8").catch(() => "null")));
-    if (saved instanceof type.errors) {
-      await rm(join(DATA, "jobs", name), { force: true });
+    const file = join(DATA, "jobs", name);
+    // An unreadable or stale temp file is dropped; it must never stop the server from starting.
+    const saved = name.endsWith(".json")
+      ? await readFile(file, "utf8").then((text) => SavedJob(JSON.parse(text)), () => undefined).catch(() => undefined)
+      : undefined;
+    if (!saved || saved instanceof type.errors) {
+      await rm(file, { force: true });
       continue;
     }
     say(keyOf(saved), "resumed");
@@ -185,7 +194,7 @@ process.on("SIGTERM", () => {
   console.log("shutting down");
   shuttingDown = true;
   server.close();
-  void queue.drain().then(() => process.exit(0));
+  void Promise.race([queue.drain(), new Promise((r) => setTimeout(r, DRAIN_MS))]).then(() => process.exit(0));
 });
 
 await start();

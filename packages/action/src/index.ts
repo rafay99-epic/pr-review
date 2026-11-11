@@ -17,6 +17,7 @@ import {
   FINDING_TAG,
   fingerprint,
   lastMarker,
+  postedOnHead,
   readState,
   sameIssue,
   score,
@@ -255,17 +256,13 @@ async function main() {
 
     // A run stopped mid-post (deploy, kill) may have posted some of these on this head
     // already: they keep that comment instead of getting a second one.
-    const posted = new Map<string, number>();
-    if (!dryRun && fresh.length) {
-      const comments = await gh.reviewComments(number).catch((e: unknown) => {
+    const comments = !dryRun && fresh.length
+      ? await gh.reviewComments(number).catch((e: unknown) => {
         log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
         return [];
-      });
-      for (const c of comments) {
-        const fp = lastMarker(c.body, FINDING_TAG);
-        if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === pr.head.sha) posted.set(fp, c.id);
-      }
-    }
+      })
+      : [];
+    const posted = postedOnHead(comments, pr.head.sha, ours);
 
     // New findings go inline where the diff allows; the rest go to the summary.
     const byPath = new Map(diffs.map((d) => [d.path, d]));

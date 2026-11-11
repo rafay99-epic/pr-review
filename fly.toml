@@ -5,7 +5,9 @@
 app = "reviewpilot-rafay"
 primary_region = "iad"
 kill_signal = "SIGTERM"
-kill_timeout = 60
+# Longer than the server's own shutdown (DRAIN_MS in packages/server/src/main.ts), so a
+# review that is posting during a deploy finishes instead of being cut mid-post.
+kill_timeout = 150
 
 [env]
   DATA_DIR = "/data"

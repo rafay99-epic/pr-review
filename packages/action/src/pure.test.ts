@@ -4,7 +4,7 @@ import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, type FileDiff, parseDiff, unquote } from "./diff.ts";
 import { clean } from "./render.ts";
 import { chunk, focus, settle } from "./review.ts";
-import { diffHash, fingerprint, readState, score, STATE_BUDGET, writeState } from "./state.ts";
+import { diffHash, findingTag, fingerprint, postedOnHead, readState, score, STATE_BUDGET, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
 index 1..2 100644
@@ -169,4 +169,20 @@ test("a huge file-hash map is dropped so the state stays in budget", () => {
   const out = writeState({ head: "abc", score: 5, findings: [], files });
   assert.ok(out.length <= STATE_BUDGET + 40);
   assert.equal(readState(out)?.files, undefined);
+});
+
+test("postedOnHead finds our root finding comments made on this head only", () => {
+  const ours = (login: string | undefined) => login === "bot[bot]";
+  const c = (id: number, fp: string, over: object = {}) => ({ id, body: `x\n${findingTag(fp)}`, original_commit_id: "head", user: { login: "bot[bot]" }, ...over });
+  const posted = postedOnHead(
+    [
+      c(1, "aaaaaaaaaaaa"),
+      c(2, "bbbbbbbbbbbb", { original_commit_id: "older" }),
+      c(3, "cccccccccccc", { user: { login: "someone" } }),
+      c(4, "dddddddddddd", { in_reply_to_id: 1 }),
+    ],
+    "head",
+    ours,
+  );
+  assert.deepEqual([...posted], [["aaaaaaaaaaaa", 1]]);
 });

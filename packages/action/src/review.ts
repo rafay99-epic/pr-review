@@ -251,10 +251,10 @@ export async function review(
   });
   const failedParts = parts.filter((p) => p === undefined).length;
   // Files the agents checked. A failed part's files, and any a part ran out of budget on,
-  // are read again on the next run. Deleted files have nothing to check.
+  // are read again on the next run.
   const reviewed = chunks.flatMap((part, i) => {
     const p = parts[i];
-    return p ? part.filter((d) => d.status === "deleted" || p.checked.has(d.path)).map((d) => d.path) : [];
+    return p ? part.filter((d) => p.checked.has(d.path)).map((d) => d.path) : [];
   });
   // A candidate must point at a file that exists in the checkout (a model steered by the PR
   // could otherwise put arbitrary text in a link), and may only cite rules that exist.
