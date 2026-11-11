@@ -11,6 +11,8 @@ on:
       - Dockerfile
       - fly.toml
       - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - .github/workflows/deploy.yml
   workflow_dispatch:
 
 permissions:

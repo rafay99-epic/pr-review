@@ -11,9 +11,10 @@ kill_timeout = 150
 
 [env]
   DATA_DIR = "/data"
-  # Optional comma-separated owner/repo allowlist. Empty: every repo the App is installed on,
-  # so installing the App is how a repo gets ReviewPilot.
-  REPOS = ""
+  # Comma-separated allowlist of owner/repo or owner/* entries. Every repo of these accounts
+  # that has the App installed is reviewed, new ones included; other installations are
+  # ignored, so nobody else can spend the model key. Empty allows every installation.
+  REPOS = "rafay99-epic/*"
 
 [http_service]
   internal_port = 8080

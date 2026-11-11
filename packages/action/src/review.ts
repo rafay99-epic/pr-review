@@ -185,7 +185,8 @@ export const focus = (diffs: readonly FileDiff[], seen: Readonly<Record<string, 
  * evidence cites, is among the changed files. Otherwise its last verdict stands.
  */
 export const stale = (f: Pick<Finding, "file" | "evidence">, changed: ReadonlySet<string>) =>
-  changed.has(f.file) || f.evidence.some((e) => changed.has(e.split(":")[0] ?? ""));
+  // Evidence is model text ("path:line: code" by request), so any changed path in it counts.
+  changed.has(f.file) || f.evidence.some((e) => [...changed].some((path) => e.includes(path)));
 
 /** Diff characters per find agent. Smaller parts mean shorter contexts and closer reading. */
 const CHUNK_CHARS = 25_000;

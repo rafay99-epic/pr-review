@@ -40,7 +40,7 @@ fly apps create <your-app>
 fly volumes create reviewpilot_data --size 5 --region iad -a <your-app>
 ```
 
-In `fly.toml`, set `app` to your app's name. `REPOS` is empty by default, which reviews every repository the App is installed on: installing the App on a repository turns ReviewPilot on, and uninstalling turns it off. To limit it, list repositories as `owner/repo` separated by commas.
+In `fly.toml`, set `app` to your app's name and `REPOS` to your account, as `your-account/*`. Every repository of that account with the App installed is reviewed, new ones included: installing the App on a repository turns ReviewPilot on, uninstalling turns it off. Other accounts that install the App are ignored, so they cannot spend your model key. Single repositories work too (`owner/repo`), comma separated. Empty allows every installation, which is only safe for a private App.
 
 ## 3. Add the secrets and deploy
 
@@ -72,7 +72,7 @@ The same rules as the workflow:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `REPOS` | empty (all installed) | Optional allowlist, `owner/repo,owner/repo` |
+| `REPOS` | empty (every installation) | Allowlist of `owner/*` and `owner/repo` entries, comma separated |
 | `DEBOUNCE_MS` | `60000` | Quiet time after a push before the review starts |
 | `IDLE_EXIT_MS` | `600000` | Idle time before the process exits and the machine stops |
 | `DATA_DIR` | `/data` | Where clones and pending jobs live |

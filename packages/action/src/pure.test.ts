@@ -204,14 +204,18 @@ test("the check passes only at 5/5 and annotates each open finding", () => {
   const run = { repo: "o/r", head: "abcdef0", model: "m", files: 3, reviewed: 1, candidates: 2, verified: 2, seconds: 75, timing: "find 1s", tokens: { prompt: 2_000_000, cached: 1_500_000 } };
   const finding = (n: number, severity: "major" | "minor", status: "open" | "fixed" = "open") =>
     ({ file: "a.ts", line: n, endLine: n, severity, title: `t${n}`, body: "b <!-- x -->", evidence: [], fp: `fp${n}`, status });
-  const clean5 = checkResult({ head: "abcdef0", score: 5, findings: [finding(1, "major", "fixed")] }, run, "u");
+  const clean5 = checkResult({ head: "abcdef0", score: 5, findings: [finding(1, "major", "fixed")] }, run, "u", false);
   assert.equal(clean5.conclusion, "success");
   assert.deepEqual(clean5.output?.annotations, []);
-  const four = checkResult({ head: "abcdef0", score: 3, findings: [finding(2, "minor"), finding(1, "major")] }, run, "u");
+  const four = checkResult({ head: "abcdef0", score: 3, findings: [finding(2, "minor"), finding(1, "major")] }, run, "u", false);
   assert.equal(four.conclusion, "failure");
   assert.equal(four.output?.title, "3/5 · 2 open · 1m 15s");
   assert.deepEqual(four.output?.annotations?.map((a) => [a.start_line, a.annotation_level, a.message]), [[1, "failure", "b  x "], [2, "warning", "b  x "]]);
   assert.match(four.output?.summary ?? "", /1 of 3 files changed since last review.*75% cached/);
-  const many = checkResult({ head: "h", score: 4, findings: Array.from({ length: 60 }, (_, i) => finding(i + 1, "minor")) }, run, "u");
+  const many = checkResult({ head: "h", score: 4, findings: Array.from({ length: 60 }, (_, i) => finding(i + 1, "minor")) }, run, "u", false);
   assert.equal(many.output?.annotations?.length, 50);
+  assert.match(many.output?.summary ?? "", /10 more open findings/);
+  const partial = checkResult({ head: "h", score: 5, findings: [] }, run, "u", true);
+  assert.equal(partial.conclusion, "neutral");
+  assert.match(partial.output?.title ?? "", /5\/5 \(partial\)/);
 });

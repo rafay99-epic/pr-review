@@ -43,6 +43,8 @@ test("toJob reviews non-draft, non-fork PRs by people, and /review from maintain
   assert.equal(toJob("issue_comment", comment("/review", "CONTRIBUTOR"), all), undefined);
   assert.equal(toJob("pull_request", pr(), new Set(["me/other"])), undefined);
   assert.equal(toJob("pull_request", pr(), new Set(["me/app"]))?.repo, "me/app");
+  assert.equal(toJob("pull_request", pr(), new Set(["me/*"]))?.repo, "me/app");
+  assert.equal(toJob("pull_request", pr(), new Set(["other/*"])), undefined);
   assert.equal(toJob("ping", {}, all), undefined);
 });
 

@@ -599,8 +599,8 @@ var require_Node = __commonJS({
         };
         const res = toJS.toJS(this, "", ctx);
         if (typeof onAnchor === "function")
-          for (const { count, res: res2 } of ctx.anchors.values())
-            onAnchor(res2, count);
+          for (const { count: count2, res: res2 } of ctx.anchors.values())
+            onAnchor(res2, count2);
         return typeof reviver === "function" ? applyReviver.applyReviver(reviver, { "": res }, "", res) : res;
       }
     };
@@ -708,13 +708,13 @@ var require_Alias = __commonJS({
         const anchor2 = anchors2 && source && anchors2.get(source);
         return anchor2 ? anchor2.count * anchor2.aliasCount : 0;
       } else if (identity.isCollection(node2)) {
-        let count = 0;
+        let count2 = 0;
         for (const item of node2.items) {
           const c = getAliasCount(doc, item, anchors2);
-          if (c > count)
-            count = c;
+          if (c > count2)
+            count2 = c;
         }
-        return count;
+        return count2;
       } else if (identity.isPair(node2)) {
         const kc = getAliasCount(doc, node2.key, anchors2);
         const vc = getAliasCount(doc, node2.value, anchors2);
@@ -3667,8 +3667,8 @@ var require_Document = __commonJS({
         };
         const res = toJS.toJS(this.contents, jsonArg ?? "", ctx);
         if (typeof onAnchor === "function")
-          for (const { count, res: res2 } of ctx.anchors.values())
-            onAnchor(res2, count);
+          for (const { count: count2, res: res2 } of ctx.anchors.values())
+            onAnchor(res2, count2);
         return typeof reviver === "function" ? applyReviver.applyReviver(reviver, { "": res }, "", res) : res;
       }
       /**
@@ -3745,12 +3745,12 @@ var require_errors = __commonJS({
         lineStr = prev + lineStr;
       }
       if (/[^ ]/.test(lineStr)) {
-        let count = 1;
+        let count2 = 1;
         const end = error.linePos[1];
         if (end?.line === line && end.col > col) {
-          count = Math.max(1, Math.min(end.col - col, 80 - ci));
+          count2 = Math.max(1, Math.min(end.col - col, 80 - ci));
         }
-        const pointer = " ".repeat(ci) + "^".repeat(count);
+        const pointer = " ".repeat(ci) + "^".repeat(count2);
         error.message += `:
 
 ${lineStr}
@@ -8110,8 +8110,8 @@ var Scanner = class {
   jumpToIndex(i) {
     this.i = i < 0 ? this.length + i : i;
   }
-  jumpForward(count) {
-    this.i += count;
+  jumpForward(count2) {
+    this.i += count2;
   }
   get location() {
     return this.i;
@@ -14648,8 +14648,8 @@ var RuntimeState = class _RuntimeState {
   previousOperator() {
     return this.branches.leftBound?.comparator ?? this.branches.prefixes[this.branches.prefixes.length - 1] ?? (this.branches.intersection ? "&" : this.branches.union ? "|" : this.branches.pipe ? "|>" : void 0);
   }
-  shiftedBy(count) {
-    this.scanner.jumpForward(count);
+  shiftedBy(count2) {
+    this.scanner.jumpForward(count2);
     return this;
   }
 };
@@ -16450,7 +16450,12 @@ var Completion = type({
       "tool_calls?": type({ id: "string", type: "'function'", function: { name: "string", arguments: "string" } }).array()
     }
   }).array(),
-  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number", "prompt_tokens_details?": { "cached_tokens?": "number" } },
+  // Providers differ here: some send null for the details, so they are optional and nullable.
+  "usage?": {
+    "prompt_tokens?": "number",
+    "completion_tokens?": "number",
+    "prompt_tokens_details?": type({ "cached_tokens?": "number | null" }).or("null")
+  },
   "error?": { "message?": "string" }
 });
 var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -16607,24 +16612,33 @@ ${fence(f.evidence.map(clean))}
   ].join("\n");
 }
 var duration = (s) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
-var tokens = (t) => t.prompt ? `${(t.prompt / 1e6).toFixed(1)}M tokens in${t.cached ? `, ${Math.round(t.cached / t.prompt * 100)}% cached` : ""}` : "no model calls";
-function checkResult(state, run2, summaryUrl) {
+var count = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.max(1, Math.round(n / 1e3))}k`;
+var tokens = (t) => {
+  if (!t.prompt) return "no model calls";
+  const share = Math.floor(t.cached / t.prompt * 100);
+  return `${count(t.prompt)} tokens in${share > 0 ? `, ${share}% cached` : ""}`;
+};
+function checkResult(state, run2, summaryUrl, partial) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const annotations = open.slice(0, 50).map((f) => ({
     path: f.file,
-    start_line: f.line,
-    end_line: Math.max(f.line, f.endLine),
+    // GitHub rejects the whole update for one bad annotation, so lines start at 1 and
+    // messages stay well under its 64 KB limit.
+    start_line: Math.max(1, f.line),
+    end_line: Math.max(1, f.line, f.endLine),
     annotation_level: f.severity === "minor" ? "warning" : "failure",
     title: `${f.severity}: ${flat(f.title)}`.slice(0, 255),
-    message: clean(f.body).slice(0, 6e4)
+    message: clean(f.body).slice(0, 4e3)
   }));
   return {
-    conclusion: state.score === 5 ? "success" : "failure",
+    conclusion: state.score < 5 ? "failure" : partial ? "neutral" : "success",
     details_url: summaryUrl,
     output: {
-      title: `${state.score}/5 \xB7 ${open.length} open \xB7 ${duration(run2.seconds)}`,
+      title: `${state.score}/5${partial ? " (partial)" : ""} \xB7 ${open.length} open \xB7 ${duration(run2.seconds)}`,
       summary: [
         `**${state.score}/5** on ${run2.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        ...run2.warning ? ["", `> ${run2.warning}`] : [],
+        ...open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : [],
         "",
         `${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files changed since last review`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}`
       ].join("\n"),
@@ -16994,7 +17008,10 @@ function chunk(diffs, size) {
   return parts;
 }
 var focus = (diffs, seen) => seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
-var stale = (f, changed) => changed.has(f.file) || f.evidence.some((e) => changed.has(e.split(":")[0] ?? ""));
+var stale = (f, changed) => (
+  // Evidence is model text ("path:line: code" by request), so any changed path in it counts.
+  changed.has(f.file) || f.evidence.some((e) => [...changed].some((path) => e.includes(path)))
+);
 var CHUNK_CHARS = 25e3;
 var MAX_VERIFY = 25;
 var FIND_AGENTS = 6;
@@ -17429,7 +17446,10 @@ ${summaryBody(state, prev, outside, run2)}`);
         if (!resolved) unresolved += 1;
       });
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
-      await finishCheck(checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`));
+      const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
+      const result = checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`, partial);
+      const finished = checkId !== void 0 && await gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...result }).then(() => true, () => false);
+      if (checkId !== void 0 && !finished && result.output) await finishCheck({ ...result, output: { ...result.output, annotations: [] } });
     });
     await log.report({
       score: state.score,

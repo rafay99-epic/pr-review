@@ -11,7 +11,7 @@ In the workflow, phases are collapsible groups in the Actions log and the job su
 
 ## Time
 
-The summary footer and the check show how long the review took and where the time went: find, verify, and the rest (checkout, diff, posting). While a review runs, the check shows its elapsed time.
+The summary footer and the check show how long the review took and where the time went: find, verify, and the rest (checkout, diff, merging results). Posting comes after and is not in the total. While a review runs, the check shows its elapsed time.
 
 A typical review of a 40,000-character diff takes a few minutes. The first review of a large pull request takes longest; later pushes only re-read the files that changed. Model calls back off and retry on rate limits, but never past the agent's own budget. GitHub calls time out after 30 seconds and retry safely: creating a comment is never retried in a way that could post it twice.
 

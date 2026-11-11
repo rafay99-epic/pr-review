@@ -53,30 +53,40 @@ export type Run = {
 
 export const duration = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
 
-const tokens = (t: Run["tokens"]) =>
-  t.prompt ? `${(t.prompt / 1e6).toFixed(1)}M tokens in${t.cached ? `, ${Math.round((t.cached / t.prompt) * 100)}% cached` : ""}` : "no model calls";
+const count = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.max(1, Math.round(n / 1e3))}k`);
+
+const tokens = (t: Run["tokens"]) => {
+  if (!t.prompt) return "no model calls";
+  const share = Math.floor((t.cached / t.prompt) * 100);
+  return `${count(t.prompt)} tokens in${share > 0 ? `, ${share}% cached` : ""}`;
+};
 
 /**
- * The ReviewPilot check's result: passes only at 5/5, the score in its title, and each open
- * finding as an annotation on its lines (GitHub takes up to 50 per update).
+ * The ReviewPilot check's result: passes only at a full 5/5, the score in its title, and each
+ * open finding as an annotation on its lines (GitHub takes up to 50 per update). A partial
+ * review (files skipped, parts or checks that failed) is never green: 5/5 there is neutral.
  */
-export function checkResult(state: State, run: Run, summaryUrl: string): CheckUpdate {
+export function checkResult(state: State, run: Run, summaryUrl: string, partial: boolean): CheckUpdate {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const annotations: Annotation[] = open.slice(0, 50).map((f) => ({
     path: f.file,
-    start_line: f.line,
-    end_line: Math.max(f.line, f.endLine),
+    // GitHub rejects the whole update for one bad annotation, so lines start at 1 and
+    // messages stay well under its 64 KB limit.
+    start_line: Math.max(1, f.line),
+    end_line: Math.max(1, f.line, f.endLine),
     annotation_level: f.severity === "minor" ? "warning" : "failure",
     title: `${f.severity}: ${flat(f.title)}`.slice(0, 255),
-    message: clean(f.body).slice(0, 60_000),
+    message: clean(f.body).slice(0, 4000),
   }));
   return {
-    conclusion: state.score === 5 ? "success" : "failure",
+    conclusion: state.score < 5 ? "failure" : partial ? "neutral" : "success",
     details_url: summaryUrl,
     output: {
-      title: `${state.score}/5 · ${open.length} open · ${duration(run.seconds)}`,
+      title: `${state.score}/5${partial ? " (partial)" : ""} · ${open.length} open · ${duration(run.seconds)}`,
       summary: [
         `**${state.score}/5** on ${run.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        ...(run.warning ? ["", `> ${run.warning}`] : []),
+        ...(open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : []),
         "",
         `${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files changed since last review`} · ${run.candidates} candidates, ${run.verified} checks · ${duration(run.seconds)} (${run.timing}) · ${tokens(run.tokens)}`,
       ].join("\n"),

@@ -32,7 +32,7 @@ Claims about tool versions or platform behaviour count only when the repository 
 
 Confirmed findings become inline comments on the changed lines. One summary comment holds the score, the findings table and what changed since the last push.
 
-The **ReviewPilot** check shows the review in the pull request's checks. It is in progress while the review runs, with the elapsed time. It then passes at 5/5 and fails below, with the score in its title and every open finding as an annotation on its lines, so findings also show in Files changed and the Checks tab. The check needs Checks write on the token; without it the review still posts.
+The **ReviewPilot** check shows the review in the pull request's checks. It is in progress while the review runs, with the elapsed time. It then passes at 5/5 and fails below (a partial review that skipped code is neutral, never green), with the score in its title and up to 50 open findings as annotations on their lines, so findings also show in Files changed and the Checks tab. The check needs Checks write on the token; without it the review still posts.
 
 ## Safety
 

@@ -30,7 +30,12 @@ const Completion = type({
       "tool_calls?": type({ id: "string", type: "'function'", function: { name: "string", arguments: "string" } }).array(),
     },
   }).array(),
-  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number", "prompt_tokens_details?": { "cached_tokens?": "number" } },
+  // Providers differ here: some send null for the details, so they are optional and nullable.
+  "usage?": {
+    "prompt_tokens?": "number",
+    "completion_tokens?": "number",
+    "prompt_tokens_details?": type({ "cached_tokens?": "number | null" }).or("null"),
+  },
   "error?": { "message?": "string" },
 });
 
