@@ -50,3 +50,5 @@ jobs:
 ReviewPilot reviews it on open and on every push. Comment `/review` to run it again.
 
 GitHub runs comment-triggered workflows only from the default branch, so `/review` starts working once this workflow is merged.
+
+Busy repo with long reviews or many pushes? [Run it as a server](#server) instead.

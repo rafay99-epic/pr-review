@@ -7,7 +7,7 @@ summary: Post as your-app[bot] with your logo instead of github-actions.
 
 In **Settings → Developer settings → GitHub Apps → New GitHub App**:
 
-- **Webhook:** turn off **Active**. Nothing calls the App; the workflow borrows its identity.
+- **Webhook:** turn off **Active**. Nothing calls the App; the workflow borrows its identity. Turn it on only to [run the server](#server).
 - **Repository permissions:** Pull requests and Issues read and write, Contents read, Checks read. Contents write is optional: with it, fixed findings also resolve their thread, but it lets the token push code too.
 - Upload a logo. It becomes the avatar on every comment.
 

@@ -234,7 +234,7 @@ export function Rounds() {
   return (
     <Section
       title="It follows the pull request to merge."
-      intro="Every push re-checks what is still open. Fixed findings get a reply and collapse out of the way. Dismiss one by replying, and it is never raised again."
+      intro="Every push re-reads only the files that changed and re-checks what is still open. Fixed findings get a reply and collapse out of the way. Dismiss one by replying, and it is never raised again."
     >
       <ol className="grid gap-px overflow-hidden rounded-2xl border border-line bg-line sm:grid-cols-4">
         {ROUNDS.map((r, i) => (

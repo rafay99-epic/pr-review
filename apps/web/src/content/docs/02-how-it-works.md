@@ -15,6 +15,8 @@ The diff is split into parts of about 25,000 characters. Each part goes to its o
 
 The agent opens callers, types and guards as it needs them, then submits every specific suspicion. It must list each changed file it checked; a submission that skips one is sent back.
 
+On a push, only the files whose diff changed since the last review go to the find pass; the rest were already read. A file the agent did not get to is read again next time. `/review` always reads every file.
+
 ## Verify
 
 Each candidate goes to a fresh agent that assumes it is wrong. It confirms only when all four hold:

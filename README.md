@@ -2,7 +2,7 @@
 
 # ReviewPilot
 
-An open-source PR reviewer that reads the code it needs, re-checks every finding against that code, and posts only what it can prove. Bring your own model key. No dashboard, no server.
+An open-source PR reviewer that reads the code it needs, re-checks every finding against that code, and posts only what it can prove. Bring your own model key. No dashboard. Runs in GitHub Actions, or as a small server you host for busy repos.
 
 Docs: [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)
 
@@ -11,6 +11,8 @@ Docs: [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)
 1. **Find.** The diff is split into parts and each part goes to an agent with read-only tools (read a file, search the repo, list a directory). It opens callers, types and guards as it needs them and lists every specific suspicion.
 2. **Verify.** Each candidate goes to a fresh agent that assumes it is wrong. It traces the trigger through the real code, looks for a guard that already prevents it, and confirms only what holds up.
 3. **Post.** Confirmed findings become inline comments. One summary comment shows the score and what changed since the last push.
+
+On a push, only files whose diff changed since the last review are read again. `/review` reads everything.
 
 The tools never run PR code and cannot leave the checkout.
 
@@ -82,6 +84,19 @@ Without anything else, comments come from `github-actions[bot]`. To post under y
           bot_login: ${{ steps.app.outputs.app-slug }}[bot]
 ```
 
+### Run it as a server
+
+For busy repos: no job time limit, a burst of pushes becomes one review, a push during a review stops the stale one, and clones stay warm. `packages/server` is a GitHub App webhook server that runs the same reviewer; the repo ships a `Dockerfile` and `fly.toml` for Fly.io.
+
+```sh
+fly apps create <your-app>
+fly volumes create reviewpilot_data --size 5 -a <your-app>
+fly secrets set -a <your-app> WEBHOOK_SECRET=... APP_ID=... PRIVATE_KEY="$(cat app.private-key.pem)" REVIEWPILOT_API_KEY=...
+fly deploy -a <your-app> --ha=false
+```
+
+Point the App's webhook at `https://<your-app>.fly.dev/webhook`, subscribe it to Pull request and Issue comment, and remove the workflow from those repos. Full guide: [Run it as a server](https://reviewpilot.rafay99.com/docs/#server).
+
 ## Configure
 
 Everything is optional. Without `.reviewpilot.yml`, the defaults apply. The file is read from the default branch, so a PR cannot change its own review.
@@ -128,7 +143,7 @@ rules:
 
 ## Develop
 
-A Turborepo with two workspaces: `packages/action` (the reviewer) and `apps/web` (the site and docs, [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)).
+A Turborepo with three workspaces: `packages/action` (the reviewer), `packages/server` (the webhook server) and `apps/web` (the site and docs, [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)).
 
 ```sh
 pnpm install
@@ -142,4 +157,4 @@ REVIEWPILOT_API_KEY=... pnpm --filter @reviewpilot/action local owner/repo 123  
 
 ## My repos
 
-My repos call `.github/workflows/review.yml` (owner-only gating plus the `reviewpilot[bot]` App token) through `caller.yml`. `enable.sh owner/repo` sets the secrets and opens the PR that adds it.
+My repos call `.github/workflows/review.yml` (owner-only gating plus the `reviewpilot[bot]` App token) through `caller.yml`. `enable.sh owner/repo` sets the secrets and opens the PR that adds it. Repos listed in `REPOS` in `fly.toml` are reviewed by the server instead, with their workflow disabled.
