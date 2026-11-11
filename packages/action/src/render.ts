@@ -1,5 +1,6 @@
 // Markdown for the inline comments and the one summary comment ReviewPilot keeps per PR.
 
+import type { Annotation, CheckUpdate } from "./github.ts";
 import type { Finding, State, Tracked } from "./state.ts";
 import { findingTag, SUMMARY_TAG, writeState } from "./state.ts";
 
@@ -43,8 +44,46 @@ export type Run = {
   candidates: number;
   verified: number;
   seconds: number;
+  /** Where the time went, e.g. `find 2m 1s, verify 48.0s`. */
+  timing: string;
+  /** Input tokens, and how many of them the provider served from its prompt cache. */
+  tokens: { prompt: number; cached: number };
   warning?: string;
 };
+
+export const duration = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`);
+
+const tokens = (t: Run["tokens"]) =>
+  t.prompt ? `${(t.prompt / 1e6).toFixed(1)}M tokens in${t.cached ? `, ${Math.round((t.cached / t.prompt) * 100)}% cached` : ""}` : "no model calls";
+
+/**
+ * The ReviewPilot check's result: passes only at 5/5, the score in its title, and each open
+ * finding as an annotation on its lines (GitHub takes up to 50 per update).
+ */
+export function checkResult(state: State, run: Run, summaryUrl: string): CheckUpdate {
+  const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
+  const annotations: Annotation[] = open.slice(0, 50).map((f) => ({
+    path: f.file,
+    start_line: f.line,
+    end_line: Math.max(f.line, f.endLine),
+    annotation_level: f.severity === "minor" ? "warning" : "failure",
+    title: `${f.severity}: ${flat(f.title)}`.slice(0, 255),
+    message: clean(f.body).slice(0, 60_000),
+  }));
+  return {
+    conclusion: state.score === 5 ? "success" : "failure",
+    details_url: summaryUrl,
+    output: {
+      title: `${state.score}/5 · ${open.length} open · ${duration(run.seconds)}`,
+      summary: [
+        `**${state.score}/5** on ${run.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        "",
+        `${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files changed since last review`} · ${run.candidates} candidates, ${run.verified} checks · ${duration(run.seconds)} (${run.timing}) · ${tokens(run.tokens)}`,
+      ].join("\n"),
+      annotations,
+    },
+  };
+}
 
 export function summaryBody(state: State, prev: State | undefined, outside: readonly Tracked[], run: Run): string {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
@@ -78,10 +117,9 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
   }
   if (run.warning) lines.push("", `> ${run.warning}`);
 
-  const time = run.seconds >= 60 ? `${Math.floor(run.seconds / 60)}m ${run.seconds % 60}s` : `${run.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files changed since last review`} · ${run.candidates} candidates, ${run.verified} checks · ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run.head.slice(0, 7)} with ${run.model} · ${run.reviewed === run.files ? `${run.files} files` : `${run.reviewed} of ${run.files} files changed since last review`} · ${run.candidates} candidates, ${run.verified} checks · ${duration(run.seconds)} (${run.timing}) · ${tokens(run.tokens)}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state),
   );

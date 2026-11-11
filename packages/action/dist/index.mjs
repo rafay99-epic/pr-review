@@ -3769,7 +3769,7 @@ ${pointer}
 var require_resolve_props = __commonJS({
   "../../node_modules/.pnpm/yaml@2.9.1/node_modules/yaml/dist/compose/resolve-props.js"(exports) {
     "use strict";
-    function resolveProps(tokens, { flow, indicator, next: next2, offset, onError, parentIndent, startOnNewline }) {
+    function resolveProps(tokens2, { flow, indicator, next: next2, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
       let atNewline = startOnNewline;
       let hasSpace = startOnNewline;
@@ -3784,7 +3784,7 @@ var require_resolve_props = __commonJS({
       let comma = null;
       let found = null;
       let start = null;
-      for (const token of tokens) {
+      for (const token of tokens2) {
         if (reqSpace) {
           if (token.type !== "space" && token.type !== "newline" && token.type !== "comma")
             onError(token.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
@@ -3875,7 +3875,7 @@ var require_resolve_props = __commonJS({
             hasSpace = false;
         }
       }
-      const last = tokens[tokens.length - 1];
+      const last = tokens2[tokens2.length - 1];
       const end = last ? last.offset + last.source.length : offset;
       if (reqSpace && next2 && next2.type !== "space" && next2.type !== "newline" && next2.type !== "comma" && (next2.type !== "scalar" || next2.source !== "")) {
         onError(next2.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
@@ -5215,8 +5215,8 @@ ${cb}` : comment;
        * @param forceDoc - If the stream contains no document, still emit a final document including any comments and directives that would be applied to a subsequent document.
        * @param endOffset - Should be set if `forceDoc` is also set, to set the document range end and to indicate errors correctly.
        */
-      *compose(tokens, forceDoc = false, endOffset = -1) {
-        for (const token of tokens)
+      *compose(tokens2, forceDoc = false, endOffset = -1) {
+        for (const token of tokens2)
           yield* this.next(token);
         yield* this.end(forceDoc, endOffset);
       }
@@ -8128,8 +8128,8 @@ var Scanner = class {
   lookaheadIs(char) {
     return this.lookahead === char;
   }
-  lookaheadIsIn(tokens) {
-    return this.lookahead in tokens;
+  lookaheadIsIn(tokens2) {
+    return this.lookahead in tokens2;
   }
 };
 var writeUnmatchedGroupCloseMessage = (char, unscanned) => `Unmatched ${char}${unscanned === "" ? "" : ` before ${unscanned}`}`;
@@ -16100,7 +16100,9 @@ var FileConfig = type({
   "review?": {
     "ignore?": "string[]",
     "min_severity?": Severity,
-    "max_findings?": "0 < number.integer <= 50"
+    "max_findings?": "0 < number.integer <= 50",
+    /** On a push: `changed` re-reads only files whose diff changed, `all` re-reads the whole PR. */
+    "scope?": "'changed' | 'all'"
   },
   "rules?": Rule.array(),
   "instructions?": "string",
@@ -16128,7 +16130,8 @@ var DEFAULTS = {
       "**/*.lottie"
     ],
     min_severity: "minor",
-    max_findings: 20
+    max_findings: 20,
+    scope: "changed"
   },
   rules: [],
   instructions: "",
@@ -16379,6 +16382,9 @@ function createGitHub(token, repo) {
     reviewComments: (n) => all(ReviewComment, `${r}/pulls/${n}/comments`),
     comment: (n, body) => call(Created, "POST", `${r}/issues/${n}/comments`, { body }),
     editComment: (id, body) => call(Created, "PATCH", `${r}/issues/comments/${id}`, { body }),
+    /** The ReviewPilot check on a commit. Needs Checks write on the token. */
+    createCheck: (head, body) => call(Created, "POST", `${r}/check-runs`, { name: "ReviewPilot", head_sha: head, ...body }),
+    updateCheck: (id, body) => call(Created, "PATCH", `${r}/check-runs/${id}`, body),
     react: (commentId, content) => call(done, "POST", `${r}/issues/comments/${commentId}/reactions`, { content }),
     reply: (n, commentId, body) => call(Created, "POST", `${r}/pulls/${n}/comments/${commentId}/replies`, { body }),
     review: (n, commitId, comments) => call(Created, "POST", `${r}/pulls/${n}/reviews`, {
@@ -16444,12 +16450,12 @@ var Completion = type({
       "tool_calls?": type({ id: "string", type: "'function'", function: { name: "string", arguments: "string" } }).array()
     }
   }).array(),
-  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number" },
+  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number", "prompt_tokens_details?": { "cached_tokens?": "number" } },
   "error?": { "message?": "string" }
 });
 var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 function createLlm(opts) {
-  const usage = { prompt: 0, completion: 0, calls: 0 };
+  const usage = { prompt: 0, completion: 0, calls: 0, cached: 0 };
   const url2 = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
   let sendEffort = opts.effort !== "none";
   async function chat(messages, tools, force, deadline) {
@@ -16516,6 +16522,7 @@ function createLlm(opts) {
       usage.calls += 1;
       usage.prompt += data.usage?.prompt_tokens ?? 0;
       usage.completion += data.usage?.completion_tokens ?? 0;
+      usage.cached += data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
       return {
         role: "assistant",
         content: message.content ?? null,
@@ -16568,7 +16575,7 @@ function createLog(actions) {
           rows,
           `| **Total** | **${seconds(total)}** |`,
           "",
-          `Model \`${facts.model}\`: ${facts.usage.calls} calls, ${facts.usage.prompt.toLocaleString("en")} input and ${facts.usage.completion.toLocaleString("en")} output tokens.`,
+          `Model \`${facts.model}\`: ${facts.usage.calls} calls, ${facts.usage.prompt.toLocaleString("en")} input (${facts.usage.cached.toLocaleString("en")} cached) and ${facts.usage.completion.toLocaleString("en")} output tokens.`,
           ""
         ].join("\n")
       );
@@ -16599,6 +16606,32 @@ ${fence(f.evidence.map(clean))}
     findingTag(f.fp)
   ].join("\n");
 }
+var duration = (s) => s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+var tokens = (t) => t.prompt ? `${(t.prompt / 1e6).toFixed(1)}M tokens in${t.cached ? `, ${Math.round(t.cached / t.prompt * 100)}% cached` : ""}` : "no model calls";
+function checkResult(state, run2, summaryUrl) {
+  const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
+  const annotations = open.slice(0, 50).map((f) => ({
+    path: f.file,
+    start_line: f.line,
+    end_line: Math.max(f.line, f.endLine),
+    annotation_level: f.severity === "minor" ? "warning" : "failure",
+    title: `${f.severity}: ${flat(f.title)}`.slice(0, 255),
+    message: clean(f.body).slice(0, 6e4)
+  }));
+  return {
+    conclusion: state.score === 5 ? "success" : "failure",
+    details_url: summaryUrl,
+    output: {
+      title: `${state.score}/5 \xB7 ${open.length} open \xB7 ${duration(run2.seconds)}`,
+      summary: [
+        `**${state.score}/5** on ${run2.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        "",
+        `${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files changed since last review`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}`
+      ].join("\n"),
+      annotations
+    }
+  };
+}
 function summaryBody(state, prev, outside, run2) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const fixed = state.findings.filter((f) => f.status === "fixed" && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
@@ -16627,10 +16660,9 @@ function summaryBody(state, prev, outside, run2) {
     lines.push("\n</details>");
   }
   if (run2.warning) lines.push("", `> ${run2.warning}`);
-  const time = run2.seconds >= 60 ? `${Math.floor(run2.seconds / 60)}m ${run2.seconds % 60}s` : `${run2.seconds}s`;
   lines.push(
     "",
-    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files changed since last review`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${time}. Every finding was re-checked against the code before posting.</sub>`,
+    `<sub>Reviewed ${run2.head.slice(0, 7)} with ${run2.model} \xB7 ${run2.reviewed === run2.files ? `${run2.files} files` : `${run2.reviewed} of ${run2.files} files changed since last review`} \xB7 ${run2.candidates} candidates, ${run2.verified} checks \xB7 ${duration(run2.seconds)} (${run2.timing}) \xB7 ${tokens(run2.tokens)}. Every finding was re-checked against the code before posting.</sub>`,
     SUMMARY_TAG,
     writeState(state)
   );
@@ -16962,8 +16994,11 @@ function chunk(diffs, size) {
   return parts;
 }
 var focus = (diffs, seen) => seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
+var stale = (f, changed) => changed.has(f.file) || f.evidence.some((e) => changed.has(e.split(":")[0] ?? ""));
 var CHUNK_CHARS = 25e3;
 var MAX_VERIFY = 25;
+var FIND_AGENTS = 6;
+var VERIFY_AGENTS = 8;
 async function review(input2) {
   const { config, diffs, previous, log: log2 } = input2;
   const changed = input2.scope.filter((d) => d.status !== "deleted").map((d) => d.path);
@@ -16976,7 +17011,8 @@ async function review(input2) {
   const all = diffs.map((d) => `- ${d.path} (${d.status})`).join("\n");
   const chunks = chunk(input2.scope, CHUNK_CHARS);
   log2(`find: ${changed.length} of ${diffs.length} files in ${chunks.length} parts`);
-  const parts = await pool(chunks, 3, async (part, i) => {
+  const findStart = Date.now();
+  const parts = await pool(chunks, FIND_AGENTS, async (part, i) => {
     const mine = part.filter((d) => d.status !== "deleted").map((d) => d.path);
     const user = [
       `PR title: ${input2.pr.title}`,
@@ -17004,6 +17040,7 @@ ${d.numbered}`).join("\n\n")}`
       return void 0;
     });
   });
+  const findMs = Date.now() - findStart;
   const failedParts = parts.filter((p) => p === void 0).length;
   const reviewed = chunks.flatMap((part, i) => {
     const p = parts[i];
@@ -17015,14 +17052,17 @@ ${d.numbered}`).join("\n\n")}`
   const found = candidates.filter((_, i) => exists[i]).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
   if (found.length < candidates.length) log2(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
   log2(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
+  const changedPaths = new Set(input2.scope.map((d) => d.path));
+  const recheck = open.filter((p) => diffs.some((d) => d.path === p.file));
+  const due = recheck.filter((p) => stale(p, changedPaths));
+  if (due.length < recheck.length) log2(`verify: ${recheck.length - due.length} earlier findings kept as they were, their code did not change`);
   const jobs = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
-    // An earlier finding is re-checked only when its file is in the reviewed diff. Without
-    // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
-    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p }))
+    ...due.map((p) => ({ finding: p, previous: p }))
   ];
   const patchOf = (file) => diffs.find((d) => d.path === file)?.numbered ?? "(This file is not changed in the PR. Open it with read_file, and check what in the diff it depends on.)";
-  const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
+  const verifyStart = Date.now();
+  const checked = await pool(jobs, VERIFY_AGENTS, async ({ finding, previous: prev }) => {
     const verdict = await runAgent({
       llm: input2.verify,
       root: input2.root,
@@ -17050,7 +17090,7 @@ ${patchOf(finding.file)}`
     if (verdict) log2(`verify ${verdict.verdict}: ${finding.file}:${finding.line} ${finding.title} (${verdict.reason.slice(0, 160)})`);
     return { finding, ...verdict ? { verdict } : {}, ...prev ? { previous: prev } : {} };
   });
-  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed, findMs, verifyMs: Date.now() - verifyStart };
 }
 var Groups = type({ duplicates: "string[][]" });
 async function dedupe(llm, root, findings, known, log2) {
@@ -17162,8 +17202,21 @@ async function main() {
     const edited = summaryId ? await gh.editComment(summaryId, body).catch(() => void 0) : void 0;
     summaryId = edited?.id ?? (await gh.comment(number2, body)).id;
   }
+  const checkId = dryRun ? void 0 : await gh.createCheck(pr.head.sha, {
+    status: "in_progress",
+    started_at: new Date(started).toISOString(),
+    output: { title: "Reviewing", summary: `Reviewing ${pr.head.sha.slice(0, 7)}. The score and findings appear here when it is done.` }
+  }).then((c) => c.id, (e) => {
+    log.warn(`No ReviewPilot check, the token needs Checks write: ${String(e).slice(0, 200)}`);
+    return void 0;
+  });
+  const finishCheck = (body) => checkId === void 0 ? Promise.resolve() : gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...body }).then(() => void 0, (e) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
   const restoreSummary = async (what) => {
     if (dryRun || summaryId === void 0) return;
+    await finishCheck({
+      conclusion: what === "stopped" ? "cancelled" : "neutral",
+      output: { title: what === "stopped" ? "Stopped" : "Review failed", summary: what === "stopped" ? "A newer push or the time limit stopped this review." : "The review failed. Comment `/review` to retry." }
+    });
     const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
     const restore = existing?.id === summaryId ? existing.body : void 0;
     const why = what === "stopped" ? "A newer push or the time limit stopped it." : process.env.GITHUB_RUN_ID ? `See the [workflow run](${runUrl}).` : "See the ReviewPilot server logs.";
@@ -17226,9 +17279,9 @@ ${text}` : "";
     const llm = (m) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    const seen = comment ? void 0 : prev?.files;
+    const seen = comment || config.review.scope === "all" ? void 0 : prev?.files;
     const scope2 = focus(diffs, seen);
-    const { checked, candidates, verified, failedParts, parts, reviewed } = await log.phase(
+    const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase(
       "Review",
       () => review({
         find,
@@ -17308,6 +17361,13 @@ ${text}` : "";
       failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : ""
     ].filter(Boolean).join(" ");
     const modelLabel = verifyModel === model ? model : `${model} (verify: ${verifyModel})`;
+    const usage = verify === find ? find.usage : {
+      calls: find.usage.calls + verify.usage.calls,
+      prompt: find.usage.prompt + verify.usage.prompt,
+      completion: find.usage.completion + verify.usage.completion,
+      cached: find.usage.cached + verify.usage.cached
+    };
+    const elapsed = Date.now() - started;
     const run2 = {
       repo,
       head: pr.head.sha,
@@ -17316,11 +17376,12 @@ ${text}` : "";
       reviewed: scope2.length,
       candidates,
       verified,
-      seconds: Math.round((Date.now() - started) / 1e3),
+      seconds: Math.round(elapsed / 1e3),
+      timing: `find ${seconds(findMs)}, verify ${seconds(verifyMs)}, rest ${seconds(Math.max(0, elapsed - findMs - verifyMs))}`,
+      tokens: { prompt: usage.prompt, cached: usage.cached },
       ...warningText ? { warning: warningText } : {}
     };
-    const usage = verify === find ? find.usage : { calls: find.usage.calls + verify.usage.calls, prompt: find.usage.prompt + verify.usage.prompt, completion: find.usage.completion + verify.usage.completion };
-    log.line(`Score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed. ${usage.calls} model calls, ${usage.prompt.toLocaleString("en")} in / ${usage.completion.toLocaleString("en")} out tokens.`);
+    log.line(`Score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed. ${usage.calls} model calls, ${usage.prompt.toLocaleString("en")} in (${usage.cached.toLocaleString("en")} cached) / ${usage.completion.toLocaleString("en")} out tokens.`);
     if (dryRun) {
       for (const c of inline) log.line(`
 --- inline ${c.path}:${c.start_line ? `${c.start_line}-` : ""}${c.line}
@@ -17368,6 +17429,7 @@ ${summaryBody(state, prev, outside, run2)}`);
         if (!resolved) unresolved += 1;
       });
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
+      await finishCheck(checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`));
     });
     await log.report({
       score: state.score,

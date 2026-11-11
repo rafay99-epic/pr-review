@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, type FileDiff, parseDiff, unquote } from "./diff.ts";
-import { clean } from "./render.ts";
-import { chunk, focus, settle } from "./review.ts";
+import { checkResult, clean } from "./render.ts";
+import { chunk, focus, settle, stale } from "./review.ts";
 import { diffHash, findingTag, fingerprint, postedOnHead, readState, score, STATE_BUDGET, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
@@ -185,4 +185,33 @@ test("postedOnHead finds our root finding comments made on this head only", () =
     ours,
   );
   assert.deepEqual([...posted], [["aaaaaaaaaaaa", 1]]);
+});
+
+test("review.scope picks changed files or the whole PR on a push", () => {
+  assert.equal(loadConfig(undefined).config.review.scope, "changed");
+  assert.equal(loadConfig("review:\n  scope: all\n").config.review.scope, "all");
+  assert.match(loadConfig("review:\n  scope: everything\n").warning ?? "", /scope/);
+});
+
+test("an earlier finding is re-verified only when its file or cited code changed", () => {
+  const f = { file: "a.ts", evidence: ["a.ts:3: x()", "lib/b.ts:10: y()"] };
+  assert.equal(stale(f, new Set(["a.ts"])), true);
+  assert.equal(stale(f, new Set(["lib/b.ts"])), true);
+  assert.equal(stale(f, new Set(["c.ts"])), false);
+});
+
+test("the check passes only at 5/5 and annotates each open finding", () => {
+  const run = { repo: "o/r", head: "abcdef0", model: "m", files: 3, reviewed: 1, candidates: 2, verified: 2, seconds: 75, timing: "find 1s", tokens: { prompt: 2_000_000, cached: 1_500_000 } };
+  const finding = (n: number, severity: "major" | "minor", status: "open" | "fixed" = "open") =>
+    ({ file: "a.ts", line: n, endLine: n, severity, title: `t${n}`, body: "b <!-- x -->", evidence: [], fp: `fp${n}`, status });
+  const clean5 = checkResult({ head: "abcdef0", score: 5, findings: [finding(1, "major", "fixed")] }, run, "u");
+  assert.equal(clean5.conclusion, "success");
+  assert.deepEqual(clean5.output?.annotations, []);
+  const four = checkResult({ head: "abcdef0", score: 3, findings: [finding(2, "minor"), finding(1, "major")] }, run, "u");
+  assert.equal(four.conclusion, "failure");
+  assert.equal(four.output?.title, "3/5 · 2 open · 1m 15s");
+  assert.deepEqual(four.output?.annotations?.map((a) => [a.start_line, a.annotation_level, a.message]), [[1, "failure", "b  x "], [2, "warning", "b  x "]]);
+  assert.match(four.output?.summary ?? "", /1 of 3 files changed since last review.*75% cached/);
+  const many = checkResult({ head: "h", score: 4, findings: Array.from({ length: 60 }, (_, i) => finding(i + 1, "minor")) }, run, "u");
+  assert.equal(many.output?.annotations?.length, 50);
 });

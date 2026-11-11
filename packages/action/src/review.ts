@@ -180,10 +180,20 @@ export function chunk(diffs: readonly FileDiff[], size: number): FileDiff[][] {
 export const focus = (diffs: readonly FileDiff[], seen: Readonly<Record<string, string>> | undefined) =>
   seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
 
+/**
+ * Whether an earlier finding needs the verifier again: only when its file, or a file its
+ * evidence cites, is among the changed files. Otherwise its last verdict stands.
+ */
+export const stale = (f: Pick<Finding, "file" | "evidence">, changed: ReadonlySet<string>) =>
+  changed.has(f.file) || f.evidence.some((e) => changed.has(e.split(":")[0] ?? ""));
+
 /** Diff characters per find agent. Smaller parts mean shorter contexts and closer reading. */
 const CHUNK_CHARS = 25_000;
 /** Candidates sent to verification, most severe first. */
 const MAX_VERIFY = 25;
+/** Agents running at once in each pass. Model calls are network-bound, so this sets the wall time. */
+const FIND_AGENTS = 6;
+const VERIFY_AGENTS = 8;
 
 export type ReviewInput = {
   find: Llm;
@@ -206,7 +216,7 @@ export type Checked = { finding: Finding; verdict?: VerdictResult; previous?: Tr
 
 export async function review(
   input: ReviewInput,
-): Promise<{ checked: Checked[]; candidates: number; verified: number; failedParts: number; parts: number; reviewed: string[] }> {
+): Promise<{ checked: Checked[]; candidates: number; verified: number; failedParts: number; parts: number; reviewed: string[]; findMs: number; verifyMs: number }> {
   const { config, diffs, previous, log } = input;
   const changed = input.scope.filter((d) => d.status !== "deleted").map((d) => d.path);
   const open = previous.filter((p) => p.status === "open");
@@ -224,7 +234,8 @@ export async function review(
   const chunks = chunk(input.scope, CHUNK_CHARS);
   log(`find: ${changed.length} of ${diffs.length} files in ${chunks.length} parts`);
 
-  const parts = await pool(chunks, 3, async (part, i) => {
+  const findStart = Date.now();
+  const parts = await pool(chunks, FIND_AGENTS, async (part, i) => {
     const mine = part.filter((d) => d.status !== "deleted").map((d) => d.path);
     const user = [
       `PR title: ${input.pr.title}`,
@@ -249,6 +260,7 @@ export async function review(
       return undefined;
     });
   });
+  const findMs = Date.now() - findStart;
   const failedParts = parts.filter((p) => p === undefined).length;
   // Files the agents checked. A failed part's files, and any a part ran out of budget on,
   // are read again on the next run.
@@ -268,16 +280,21 @@ export async function review(
   if (found.length < candidates.length) log(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
   log(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
 
+  // An earlier finding is re-checked only when its file is in the PR's diff (without it the
+  // verifier cannot tell, and a rejection would wrongly mark it fixed) and its code changed.
+  const changedPaths = new Set(input.scope.map((d) => d.path));
+  const recheck = open.filter((p) => diffs.some((d) => d.path === p.file));
+  const due = recheck.filter((p) => stale(p, changedPaths));
+  if (due.length < recheck.length) log(`verify: ${recheck.length - due.length} earlier findings kept as they were, their code did not change`);
   const jobs: { finding: Finding; previous?: Tracked }[] = [
     ...found.slice(0, MAX_VERIFY).map((finding) => ({ finding })),
-    // An earlier finding is re-checked only when its file is in the reviewed diff. Without
-    // the diff the verifier cannot tell, and a rejection would wrongly mark it fixed.
-    ...open.filter((p) => diffs.some((d) => d.path === p.file)).map((p) => ({ finding: p, previous: p })),
+    ...due.map((p) => ({ finding: p, previous: p })),
   ];
 
   const patchOf = (file: string) =>
     diffs.find((d) => d.path === file)?.numbered ?? "(This file is not changed in the PR. Open it with read_file, and check what in the diff it depends on.)";
-  const checked = await pool(jobs, 4, async ({ finding, previous: prev }) => {
+  const verifyStart = Date.now();
+  const checked = await pool(jobs, VERIFY_AGENTS, async ({ finding, previous: prev }) => {
     const verdict = await runAgent({
       llm: input.verify,
       root: input.root,
@@ -307,7 +324,7 @@ export async function review(
     return { finding, ...(verdict ? { verdict } : {}), ...(prev ? { previous: prev } : {}) };
   });
 
-  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed };
+  return { checked, candidates: found.length, verified: jobs.length, failedParts, parts: chunks.length, reviewed, findMs, verifyMs: Date.now() - verifyStart };
 }
 
 const Groups = type({ duplicates: "string[][]" });

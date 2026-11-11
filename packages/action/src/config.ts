@@ -25,6 +25,8 @@ const FileConfig = type({
     "ignore?": "string[]",
     "min_severity?": Severity,
     "max_findings?": "0 < number.integer <= 50",
+    /** On a push: `changed` re-reads only files whose diff changed, `all` re-reads the whole PR. */
+    "scope?": "'changed' | 'all'",
   },
   "rules?": Rule.array(),
   "instructions?": "string",
@@ -44,6 +46,7 @@ export const DEFAULTS = {
     ],
     min_severity: "minor",
     max_findings: 20,
+    scope: "changed",
   },
   rules: [],
   instructions: "",
@@ -52,7 +55,7 @@ export const DEFAULTS = {
 
 export type Config = {
   model: { name: string; verify: string; effort: "none" | "low" | "medium" | "high" };
-  review: { ignore: string[]; min_severity: (typeof SEVERITIES)[number]; max_findings: number };
+  review: { ignore: string[]; min_severity: (typeof SEVERITIES)[number]; max_findings: number; scope: "changed" | "all" };
   rules: Rule[];
   instructions: string;
   context_files: string[];

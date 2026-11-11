@@ -19,7 +19,8 @@ export type Llm = {
   model: string;
   /** `force` names a tool the model must call this turn; `deadline` (epoch ms) caps timeouts and retries. */
   chat(messages: Message[], tools: ToolSpec[], force?: string, deadline?: number): Promise<Extract<Message, { role: "assistant" }>>;
-  usage: { prompt: number; completion: number; calls: number };
+  /** `cached` is the part of `prompt` the provider served from its prompt cache. */
+  usage: { prompt: number; completion: number; calls: number; cached: number };
 };
 
 const Completion = type({
@@ -29,7 +30,7 @@ const Completion = type({
       "tool_calls?": type({ id: "string", type: "'function'", function: { name: "string", arguments: "string" } }).array(),
     },
   }).array(),
-  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number" },
+  "usage?": { "prompt_tokens?": "number", "completion_tokens?": "number", "prompt_tokens_details?": { "cached_tokens?": "number" } },
   "error?": { "message?": "string" },
 });
 
@@ -42,7 +43,7 @@ export function createLlm(opts: {
   effort: string;
   timeoutMs?: number;
 }): Llm {
-  const usage = { prompt: 0, completion: 0, calls: 0 };
+  const usage = { prompt: 0, completion: 0, calls: 0, cached: 0 };
   const url = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
   // Dropped after a provider rejects it, so one 400 does not fail every later call.
@@ -119,6 +120,7 @@ export function createLlm(opts: {
       usage.calls += 1;
       usage.prompt += data.usage?.prompt_tokens ?? 0;
       usage.completion += data.usage?.completion_tokens ?? 0;
+      usage.cached += data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
       return {
         role: "assistant" as const,
         content: message.content ?? null,

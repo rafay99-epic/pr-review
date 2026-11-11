@@ -7,10 +7,10 @@ import { type } from "arktype";
 import { ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, parseDiff } from "./diff.ts";
 import { checkoutPr, diff, fetchRef, readAt } from "./git.ts";
-import { createGitHub, type InlineComment, type Thread } from "./github.ts";
+import { type CheckUpdate, createGitHub, type InlineComment, type Thread } from "./github.ts";
 import { createLlm } from "./llm.ts";
-import { createLog } from "./log.ts";
-import { bySeverity, inlineBody, progressBody, summaryBody } from "./render.ts";
+import { createLog, seconds } from "./log.ts";
+import { bySeverity, checkResult, inlineBody, progressBody, summaryBody } from "./render.ts";
 import { dedupe, focus, pool, review, settle } from "./review.ts";
 import {
   diffHash,
@@ -108,10 +108,34 @@ async function main() {
     summaryId = edited?.id ?? (await gh.comment(number, body)).id;
   }
 
+  // The ReviewPilot check: live on the PR's checks while the review runs, then the score with
+  // each open finding as an annotation. Without Checks write on the token there is no check.
+  const checkId = dryRun
+    ? undefined
+    : await gh
+      .createCheck(pr.head.sha, {
+        status: "in_progress",
+        started_at: new Date(started).toISOString(),
+        output: { title: "Reviewing", summary: `Reviewing ${pr.head.sha.slice(0, 7)}. The score and findings appear here when it is done.` },
+      })
+      .then((c) => c.id, (e: unknown) => {
+        log.warn(`No ReviewPilot check, the token needs Checks write: ${String(e).slice(0, 200)}`);
+        return undefined;
+      });
+  const finishCheck = (body: CheckUpdate) =>
+    checkId === undefined
+      ? Promise.resolve()
+      : gh.updateCheck(checkId, { status: "completed", completed_at: new Date().toISOString(), ...body })
+        .then(() => undefined, (e: unknown) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
+
   // Puts the previous summary back so a failed or stopped run never wipes the PR's history;
   // on a first run, says what happened instead of leaving "reviewing..." up.
   const restoreSummary = async (what: "failed" | "stopped") => {
     if (dryRun || summaryId === undefined) return;
+    await finishCheck({
+      conclusion: what === "stopped" ? "cancelled" : "neutral",
+      output: { title: what === "stopped" ? "Stopped" : "Review failed", summary: what === "stopped" ? "A newer push or the time limit stopped this review." : "The review failed. Comment `/review` to retry." },
+    });
     const runUrl = `${process.env.GITHUB_SERVER_URL ?? "https://github.com"}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}`;
     const restore = existing?.id === summaryId ? existing.body : undefined;
     const why = what === "stopped"
@@ -187,10 +211,11 @@ async function main() {
     const llm = (m: string) => createLlm({ baseUrl, apiKey, model: m, effort: config.model.effort });
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
-    // A push re-reads only files whose diff moved since the last review; `/review` reads everything.
-    const seen = comment ? undefined : prev?.files;
+    // A push re-reads only files whose diff moved since the last review, unless the repo's
+    // config says `scope: all`; `/review` reads everything.
+    const seen = comment || config.review.scope === "all" ? undefined : prev?.files;
     const scope = focus(diffs, seen);
-    const { checked, candidates, verified, failedParts, parts, reviewed } = await log.phase("Review", () =>
+    const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase("Review", () =>
       review({
         find,
         verify,
@@ -288,6 +313,15 @@ async function main() {
       failedParts > 0 ? `${failedParts} of ${parts} parts of the diff could not be reviewed this run, so this review is partial. Comment \`/review\` to retry.` : "",
     ].filter(Boolean).join(" ");
     const modelLabel = verifyModel === model ? model : `${model} (verify: ${verifyModel})`;
+    const usage = verify === find
+      ? find.usage
+      : {
+        calls: find.usage.calls + verify.usage.calls,
+        prompt: find.usage.prompt + verify.usage.prompt,
+        completion: find.usage.completion + verify.usage.completion,
+        cached: find.usage.cached + verify.usage.cached,
+      };
+    const elapsed = Date.now() - started;
     const run = {
       repo,
       head: pr.head.sha,
@@ -296,13 +330,12 @@ async function main() {
       reviewed: scope.length,
       candidates,
       verified,
-      seconds: Math.round((Date.now() - started) / 1000),
+      seconds: Math.round(elapsed / 1000),
+      timing: `find ${seconds(findMs)}, verify ${seconds(verifyMs)}, rest ${seconds(Math.max(0, elapsed - findMs - verifyMs))}`,
+      tokens: { prompt: usage.prompt, cached: usage.cached },
       ...(warningText ? { warning: warningText } : {}),
     };
-    const usage = verify === find
-      ? find.usage
-      : { calls: find.usage.calls + verify.usage.calls, prompt: find.usage.prompt + verify.usage.prompt, completion: find.usage.completion + verify.usage.completion };
-    log.line(`Score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed. ${usage.calls} model calls, ${usage.prompt.toLocaleString("en")} in / ${usage.completion.toLocaleString("en")} out tokens.`);
+    log.line(`Score ${state.score}/5: ${fresh.length} new, ${open.length} open, ${fixedNow.length} fixed. ${usage.calls} model calls, ${usage.prompt.toLocaleString("en")} in (${usage.cached.toLocaleString("en")} cached) / ${usage.completion.toLocaleString("en")} out tokens.`);
 
     if (dryRun) {
       for (const c of inline) log.line(`\n--- inline ${c.path}:${c.start_line ? `${c.start_line}-` : ""}${c.line}\n${c.body}`);
@@ -356,6 +389,8 @@ async function main() {
         if (!resolved) unresolved += 1;
       });
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
+
+      await finishCheck(checkResult(state, run, `https://github.com/${repo}/pull/${number}#issuecomment-${summaryId}`));
     });
 
     await log.report({
