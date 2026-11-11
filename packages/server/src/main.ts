@@ -33,6 +33,8 @@ const DEBOUNCE_MS = Number(process.env.DEBOUNCE_MS ?? 60_000);
 const IDLE_EXIT_MS = Number(process.env.IDLE_EXIT_MS ?? 10 * 60_000);
 /** Below the installation token's one-hour life, so a run never posts with an expired token. */
 const MAX_RUN_MS = 50 * 60_000;
+/** How long a stopped review may take to finish posting before it is killed outright. */
+const KILL_AFTER_MS = 2 * 60_000;
 const MAX_BODY = 25 * 1024 * 1024;
 
 const SavedJob = type({
@@ -60,7 +62,10 @@ function run(job: Job): Run {
     const started = Date.now();
     const [token, login] = await Promise.all([app.token(job.installation), app.login()]);
     // Git reads the token from the environment, so it is never written into the clone's config.
+    // Git and the action get only this, never the App key or webhook secret.
     const gitEnv = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
       GIT_TERMINAL_PROMPT: "0",
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
@@ -70,21 +75,16 @@ function run(job: Job): Run {
     if (!existsSync(join(dir, ".git"))) {
       say(key, "cloning");
       await rm(dir, { recursive: true, force: true });
-      await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, dir], {
-        env: { ...process.env, ...gitEnv },
-      });
+      await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, dir], { env: gitEnv });
     }
     // A run killed mid-checkout can leave the lock behind; runs on one repo never overlap.
     await rm(join(dir, ".git", "index.lock"), { force: true });
     const eventPath = join(DATA, "events", `${slug(key)}.json`);
     await writeFile(eventPath, JSON.stringify(job.payload));
     if (stopped) return;
-    // Only what the action needs: the App key and webhook secret stay in this process.
     const child = spawn(process.execPath, [ACTION], {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
         ...gitEnv,
         GITHUB_REPOSITORY: job.repo,
         GITHUB_WORKSPACE: dir,
@@ -94,10 +94,17 @@ function run(job: Job): Run {
         INPUT_BOT_LOGIN: login,
       },
     });
-    stop = () => child.kill("SIGTERM");
+    // SIGTERM lets a review that is posting finish; one that hangs is killed after a grace period.
+    stop = () => {
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), KILL_AFTER_MS).unref();
+    };
     const limit = setTimeout(stop, MAX_RUN_MS);
     for (const stream of [child.stdout, child.stderr]) createInterface({ input: stream }).on("line", (line) => say(key, line));
-    const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    const code = await new Promise<number | string | null>((resolve) => {
+      child.on("error", (e) => resolve(e.message));
+      child.on("close", (exit, signal) => resolve(exit ?? signal));
+    });
     clearTimeout(limit);
     say(key, `exited ${code} after ${Math.round((Date.now() - started) / 1000)}s`);
   })()
@@ -111,9 +118,11 @@ function run(job: Job): Run {
 
 const queue = createQueue({ run, debounceMs: DEBOUNCE_MS, maxRuns: 3 });
 
+// Scheduled before the file is written: a run of the same PR finishing in between then sees
+// the pending job and leaves the file alone.
 async function enqueue(job: Job) {
-  await writeFile(jobFile(keyOf(job)), JSON.stringify(job));
   queue.schedule(job);
+  await writeFile(jobFile(keyOf(job)), JSON.stringify(job));
 }
 
 let lastDelivery = Date.now();
