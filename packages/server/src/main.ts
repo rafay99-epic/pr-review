@@ -226,7 +226,8 @@ async function start() {
 process.on("SIGTERM", () => {
   console.log("shutting down");
   shuttingDown = true;
-  server.close();
+  // The server keeps accepting webhooks while reviews drain: new jobs are saved to disk but
+  // not started (the queue is closed), and run after the restart instead of being refused.
   void Promise.race([queue.drain(), new Promise((r) => setTimeout(r, DRAIN_MS))]).then(() => process.exit(0));
 });
 
