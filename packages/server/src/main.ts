@@ -153,7 +153,7 @@ const server = createServer(async (req, res) => {
   res.writeHead(202).end(job ? "queued" : "ignored");
   if (job) {
     say(keyOf(job), `${event} queued`);
-    await enqueue(job).catch((e: unknown) => say(keyOf(job), `could not queue: ${String(e)}`));
+    await enqueue(job).catch((e: unknown) => say(keyOf(job), `queued, but not saved for a restart: ${String(e)}`));
   }
 });
 

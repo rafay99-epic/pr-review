@@ -17110,9 +17110,11 @@ var Event = type({
   "comment?": { id: "number", body: "string", author_association: "string", user: { login: "string" } }
 });
 var posting = false;
+var stopping = false;
 var putBack;
 process.on("SIGTERM", () => {
-  if (posting) return;
+  if (posting || stopping) return;
+  stopping = true;
   void Promise.race([putBack?.(), new Promise((r) => setTimeout(r, 1e4))]).finally(() => process.exit(143));
 });
 async function main() {
@@ -17272,7 +17274,11 @@ ${text}` : "";
     const state = { head: pr.head.sha, score: score(open), findings, files };
     const posted = /* @__PURE__ */ new Map();
     if (!dryRun && fresh.length) {
-      for (const c of await gh.reviewComments(number2).catch(() => [])) {
+      const comments = await gh.reviewComments(number2).catch((e) => {
+        log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
+        return [];
+      });
+      for (const c of comments) {
         const fp = lastMarker(c.body, FINDING_TAG);
         if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === pr.head.sha) posted.set(fp, c.id);
       }
@@ -17321,6 +17327,7 @@ ${c.body}`);
 ${summaryBody(state, prev, outside, run2)}`);
       return;
     }
+    if (stopping) return;
     posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {

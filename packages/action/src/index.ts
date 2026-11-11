@@ -48,10 +48,13 @@ const Event = type({
  * run starts from the same state. Once posting starts the run finishes it.
  */
 let posting = false;
+/** Set on SIGTERM before posting: the run must not start posting while its summary is put back. */
+let stopping = false;
 /** Restores the summary this run replaced with "reviewing"; set once it has done so. */
 let putBack: (() => Promise<unknown>) | undefined;
 process.on("SIGTERM", () => {
-  if (posting) return;
+  if (posting || stopping) return;
+  stopping = true;
   // Bounded, so a hung GitHub call cannot keep a stopped run alive.
   void Promise.race([putBack?.(), new Promise((r) => setTimeout(r, 10_000))]).finally(() => process.exit(143));
 });
@@ -254,7 +257,11 @@ async function main() {
     // already: they keep that comment instead of getting a second one.
     const posted = new Map<string, number>();
     if (!dryRun && fresh.length) {
-      for (const c of await gh.reviewComments(number).catch(() => [])) {
+      const comments = await gh.reviewComments(number).catch((e: unknown) => {
+        log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
+        return [];
+      });
+      for (const c of comments) {
         const fp = lastMarker(c.body, FINDING_TAG);
         if (fp && !c.in_reply_to_id && ours(c.user?.login) && c.original_commit_id === pr.head.sha) posted.set(fp, c.id);
       }
@@ -306,6 +313,8 @@ async function main() {
       return;
     }
 
+    // Stopped meanwhile: the SIGTERM handler is restoring the summary and exits when done.
+    if (stopping) return;
     posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {
