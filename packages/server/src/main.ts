@@ -4,6 +4,7 @@
 // spell and the platform starts it again on the next delivery, so it only costs while working.
 
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -154,12 +155,14 @@ const queue = createQueue({ run, debounceMs: DEBOUNCE_MS, maxRuns: 3 });
 
 // Scheduled before the file is written: a run of the same PR finishing in between then sees
 // the pending job and leaves the file alone.
-async function enqueue(job: Job) {
-  queue.schedule(job);
-  // Written whole, then renamed into place: a crash mid-write never leaves a torn job file.
+async function enqueue(incoming: Job) {
+  const job = queue.schedule(incoming);
+  // Written whole to its own temp file, then renamed into place: neither a crash nor two
+  // deliveries for one PR at once can leave a torn job file. The last rename wins.
   const file = jobFile(keyOf(job));
-  await writeFile(`${file}.tmp`, JSON.stringify(job));
-  await rename(`${file}.tmp`, file);
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  await writeFile(tmp, JSON.stringify(job));
+  await rename(tmp, file);
 }
 
 let lastDelivery = Date.now();

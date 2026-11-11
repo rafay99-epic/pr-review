@@ -110,9 +110,11 @@ async function main() {
 
   // The ReviewPilot check: live on the PR's checks while the review runs, then the score with
   // each open finding as an annotation. Without Checks write on the token there is no check.
-  const checkId = dryRun
-    ? undefined
-    : await gh
+  // Created without waiting: the stop handler is set up first, so a SIGTERM while the check is
+  // being created still finds it (finishCheck waits for it) and closes it.
+  const checkReady: Promise<number | undefined> = dryRun
+    ? Promise.resolve(undefined)
+    : gh
       .createCheck(pr.head.sha, {
         status: "in_progress",
         started_at: new Date(started).toISOString(),
@@ -122,21 +124,12 @@ async function main() {
         log.warn(`No ReviewPilot check, the token needs Checks write: ${String(e).slice(0, 200)}`);
         return undefined;
       });
-  // A run killed outright (SIGKILL, a crash) leaves its check in progress; the next run on
-  // the same commit closes those so the commit never shows a review that is not running.
-  if (checkId !== undefined) {
-    const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
-    for (const id of leftover.filter((id) => id !== checkId)) {
-      await gh
-        .updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: new Date().toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } })
-        .catch(() => undefined);
-    }
-  }
-  const finishCheck = (body: CheckUpdate) =>
-    checkId === undefined
-      ? Promise.resolve()
-      : gh.updateCheck(checkId, { status: "completed", completed_at: new Date().toISOString(), ...body })
-        .then(() => undefined, (e: unknown) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
+  const finishCheck = async (body: CheckUpdate) => {
+    const id = await checkReady;
+    if (id === undefined) return;
+    await gh.updateCheck(id, { status: "completed", completed_at: new Date().toISOString(), ...body })
+      .then(() => undefined, (e: unknown) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
+  };
 
   // Puts the previous summary back so a failed or stopped run never wipes the PR's history;
   // on a first run, says what happened instead of leaving "reviewing..." up. Runs once, even
@@ -161,6 +154,18 @@ async function main() {
     await gh.editComment(summaryId, body).catch(() => undefined);
   };
   putBack = () => restoreSummary("stopped");
+
+  const checkId = await checkReady;
+  // A run killed outright (SIGKILL, a crash) leaves its check in progress; the next run on
+  // the same commit closes those so the commit never shows a review that is not running.
+  if (checkId !== undefined) {
+    const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
+    for (const id of leftover.filter((id) => id !== checkId)) {
+      await gh
+        .updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: new Date().toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } })
+        .catch(() => undefined);
+    }
+  }
 
   try {
     const { config, warning, mergeBase, defaultRef } = await log.phase("Checkout", async () => {
@@ -364,11 +369,11 @@ async function main() {
     posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {
-        const posted = await gh.review(number, pr.head.sha, inline).then(() => true, (e: unknown) => {
+        const sent = await gh.review(number, pr.head.sha, inline).then(() => true, (e: unknown) => {
           log.warn(`Inline review failed, findings go to the summary instead: ${String(e)}`);
           return false;
         });
-        if (posted) {
+        if (sent) {
           // Remember each finding's comment id: it ties the finding to its thread from now on.
           const comments = await gh.reviewComments(number).catch(() => []);
           for (const f of fresh) {
@@ -376,7 +381,8 @@ async function main() {
             if (id !== undefined) f.commentId = id;
           }
         } else {
-          outside.push(...fresh.filter((f) => !outside.includes(f)));
+          // Findings already posted on this head keep their inline comment; only the rest move.
+          outside.push(...fresh.filter((f) => !outside.includes(f) && !posted.has(f.fp)));
         }
       }
 

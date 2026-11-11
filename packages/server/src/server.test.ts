@@ -106,3 +106,36 @@ test("one review per repo at a time; /review skips the debounce", async (t) => {
   await tick();
   assert.deepEqual(started, [1, 9, 2]);
 });
+
+test("a push never downgrades a pending or running /review to a changed-files review", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const started: Job[] = [];
+  const finish: (() => void)[] = [];
+  const queue = createQueue({
+    debounceMs: 1000,
+    maxRuns: 2,
+    run: (j) => {
+      started.push(j);
+      return { done: new Promise<void>((r) => finish.push(r)), stop: () => finish.at(-1)?.() };
+    },
+  });
+  const review: Job = { ...job(3, false), event: "issue_comment" };
+  queue.schedule({ ...job(9, false, "me/busy") });
+  queue.schedule({ ...job(8, false, "me/busy2") });
+  queue.schedule(review);
+  t.mock.timers.tick(0);
+  // /review is waiting for a slot; a push arrives and replaces it, but stays a full review.
+  queue.schedule(job(3));
+  t.mock.timers.tick(1000);
+  finish[0]?.();
+  await tick();
+  assert.equal(started.at(-1)?.event, "issue_comment");
+  assert.equal(started.at(-1)?.number, 3);
+  // A push during that running /review restarts it, still as a full review.
+  queue.schedule(job(3));
+  await tick();
+  t.mock.timers.tick(1000);
+  finish[1]?.();
+  await tick();
+  assert.equal(started.at(-1)?.event, "issue_comment");
+});

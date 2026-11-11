@@ -17226,7 +17226,7 @@ async function main() {
     const edited = summaryId ? await gh.editComment(summaryId, body).catch(() => void 0) : void 0;
     summaryId = edited?.id ?? (await gh.comment(number2, body)).id;
   }
-  const checkId = dryRun ? void 0 : await gh.createCheck(pr.head.sha, {
+  const checkReady = dryRun ? Promise.resolve(void 0) : gh.createCheck(pr.head.sha, {
     status: "in_progress",
     started_at: new Date(started).toISOString(),
     output: { title: "Reviewing", summary: `Reviewing ${pr.head.sha.slice(0, 7)}. The score and findings appear here when it is done.` }
@@ -17234,13 +17234,11 @@ async function main() {
     log.warn(`No ReviewPilot check, the token needs Checks write: ${String(e).slice(0, 200)}`);
     return void 0;
   });
-  if (checkId !== void 0) {
-    const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
-    for (const id of leftover.filter((id2) => id2 !== checkId)) {
-      await gh.updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: (/* @__PURE__ */ new Date()).toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } }).catch(() => void 0);
-    }
-  }
-  const finishCheck = (body) => checkId === void 0 ? Promise.resolve() : gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...body }).then(() => void 0, (e) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
+  const finishCheck = async (body) => {
+    const id = await checkReady;
+    if (id === void 0) return;
+    await gh.updateCheck(id, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...body }).then(() => void 0, (e) => log.warn(`Could not finish the ReviewPilot check: ${String(e).slice(0, 200)}`));
+  };
   let restoring;
   let stateSaved = false;
   const restoreSummary = (what) => restoring ??= putBackSummary(what);
@@ -17261,6 +17259,13 @@ ${writeState(prev)}` : ""}`;
     await gh.editComment(summaryId, body).catch(() => void 0);
   };
   putBack = () => restoreSummary("stopped");
+  const checkId = await checkReady;
+  if (checkId !== void 0) {
+    const leftover = await gh.runningChecks(pr.head.sha).catch(() => []);
+    for (const id of leftover.filter((id2) => id2 !== checkId)) {
+      await gh.updateCheck(id, { status: "completed", conclusion: "cancelled", completed_at: (/* @__PURE__ */ new Date()).toISOString(), output: { title: "Replaced", summary: "A newer review run replaced this one." } }).catch(() => void 0);
+    }
+  }
   try {
     const { config, warning, mergeBase, defaultRef } = await log.phase("Checkout", async () => {
       const mergeBase2 = await checkoutPr(root, number2, pr.head.sha, pr.base);
@@ -17428,18 +17433,18 @@ ${summaryBody(state, prev, outside, run2)}`);
     posting = true;
     await log.phase("Post", async () => {
       if (inline.length) {
-        const posted2 = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
+        const sent = await gh.review(number2, pr.head.sha, inline).then(() => true, (e) => {
           log.warn(`Inline review failed, findings go to the summary instead: ${String(e)}`);
           return false;
         });
-        if (posted2) {
+        if (sent) {
           const comments2 = await gh.reviewComments(number2).catch(() => []);
           for (const f of fresh) {
             const id = comments2.findLast((c) => !c.in_reply_to_id && ours(c.user?.login) && lastMarker(c.body, FINDING_TAG) === f.fp)?.id;
             if (id !== void 0) f.commentId = id;
           }
         } else {
-          outside.push(...fresh.filter((f) => !outside.includes(f)));
+          outside.push(...fresh.filter((f) => !outside.includes(f) && !posted.has(f.fp)));
         }
       }
       const body = summaryBody(state, prev, outside, run2);
