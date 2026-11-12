@@ -74,8 +74,9 @@ export function createLlm(opts: {
           // "none" leaves the parameter out, for providers that reject it.
           ...(sendEffort ? { reasoning_effort: opts.effort } : {}),
         }),
-        // At least 60s even past the deadline: the forced final call must still get an answer.
-        signal: AbortSignal.timeout(Math.max(60_000, Math.min(opts.timeoutMs ?? 240_000, left()))),
+        // Never past the deadline for a normal turn (at least 60s), but the forced final call gets
+        // two minutes even past it: that answer is the part's whole result.
+        signal: AbortSignal.timeout(Math.max(force ? 120_000 : 60_000, Math.min(opts.timeoutMs ?? 240_000, left()))),
       }).catch((e: unknown) => ({ ok: false, status: 0, error: e }) as const);
 
       const retryable = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);

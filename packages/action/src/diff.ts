@@ -85,13 +85,9 @@ export function anchor(
 ): { line: number; startLine?: number } | undefined {
   if (!file) return undefined;
   // The last commentable line in the range, so a range that ends on unchanged code still anchors.
+  // Found by the set, not by walking the range: a model-written end line can be huge.
   let last: number | undefined;
-  for (let n = end; n >= start; n--) {
-    if (file.commentable.has(n)) {
-      last = n;
-      break;
-    }
-  }
+  for (const n of file.commentable) if (n >= start && n <= end && (last === undefined || n > last)) last = n;
   if (last === undefined) return undefined;
   const first = start < last && file.commentable.has(start) && file.hunkOf.get(start) === file.hunkOf.get(last)
     ? start

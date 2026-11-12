@@ -6,14 +6,13 @@ import { readFile } from "node:fs/promises";
 import { type } from "arktype";
 import { ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, parseDiff } from "./diff.ts";
-import { checkoutPr, diff, fetchRef, readAt } from "./git.ts";
+import { changedSince, checkoutPr, diff, fetchRef, readAt } from "./git.ts";
 import { type CheckUpdate, createGitHub, type InlineComment, type Thread } from "./github.ts";
 import { createLlm } from "./llm.ts";
 import { createLog, seconds } from "./log.ts";
 import { bySeverity, checkResult, inlineBody, PROGRESS, progressBody, summaryBody } from "./render.ts";
-import { dedupe, focus, pool, review, settle } from "./review.ts";
+import { dedupe, focus, type Limits, nextFiles, pool, reportable, review, settle } from "./review.ts";
 import {
-  diffHash,
   FINDING_TAG,
   fingerprint,
   lastMarker,
@@ -240,7 +239,16 @@ async function main() {
     // A push re-reads only files whose diff moved since the last review, unless the repo's
     // config says `scope: all`; `/review` reads everything.
     const seen = comment || config.review.scope === "all" ? undefined : prev?.files;
-    const scope = focus(diffs, seen);
+    // The lines changed since the last reviewed commit. Without that commit (history rewritten
+    // and gone) every changed file is read whole.
+    const since = seen && prev && prev.head !== pr.head.sha
+      ? await changedSince(root, prev.head, pr.head.sha, config.review.ignore).catch((e: unknown) => {
+        log.warn(`Could not diff against the last reviewed commit, so changed files are read whole: ${String(e)}`);
+        return undefined;
+      })
+      : undefined;
+    const { scope, fresh: freshLines, changed } = focus(diffs, seen, since);
+    const limits: Limits = { diffs, scope, fresh: freshLines, incremental: seen !== undefined, outside: config.review.outside_diff };
     const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase("Review", () =>
       review({
         find,
@@ -253,11 +261,13 @@ async function main() {
         diffs,
         scope,
         previous,
+        limits,
+        changed,
         log: log.line,
       }),
     );
 
-    const { findings, fresh, overCap } = await log.phase("Merge", async () => {
+    const { findings, fresh, notes, overCap } = await log.phase("Merge", async () => {
       // Earlier open findings stay open, become fixed, or stay as they were when the check failed.
       const findings: Tracked[] = previous.map((p) => {
         if (p.status !== "open") return p;
@@ -269,21 +279,30 @@ async function main() {
         const { line, endLine, severity } = settle(p, c.verdict);
         return { ...p, line, endLine, severity };
       });
+      // The verifier can move a finding; one it moved out of bounds is dropped like any other.
       const confirmed = checked
         .flatMap((c) => (!c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []))
-        .filter((f) => SEVERITIES.indexOf(f.severity) <= minRank)
+        .filter((f) => SEVERITIES.indexOf(f.severity) <= minRank && reportable(f, limits))
         .sort(bySeverity);
       // Drop findings that repeat each other or an earlier open or dismissed one. A finding
       // that matches a fixed one was reintroduced: it replaces the fixed entry and posts again.
       const known = findings.filter((t) => t.status !== "fixed");
       const fresh: Tracked[] = [];
+      // With `outside_diff: summary`, a finding off the diff is listed for information only: it
+      // is not tracked, posted inline or scored, and it takes no slot under max_findings.
+      const notes: Tracked[] = [];
+      const byPath = new Map(diffs.map((d) => [d.path, d]));
       let overCap = 0;
       for (const f of await dedupe(find, root, confirmed, known, log.line)) {
         // Same title, same file, far apart: two different defects, so the fingerprint gets the line.
         const base = fingerprint(f);
         const clash = [...findings, ...fresh].find((t) => t.fp === base && t.status !== "fixed" && Math.abs(t.line - f.line) > 20);
         const fp = clash ? fingerprint({ file: f.file, title: `${f.title}@${f.line}` }) : base;
-        if ([...known, ...fresh].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if ([...known, ...fresh, ...notes].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if (config.review.outside_diff === "summary" && !anchor(byPath.get(f.file), f.line, f.endLine)) {
+          notes.push({ ...f, fp, status: "open" });
+          continue;
+        }
         if (fresh.length >= config.review.max_findings) {
           overCap += 1;
           continue;
@@ -293,16 +312,11 @@ async function main() {
         fresh.push({ ...f, fp, status: "open" });
       }
       findings.push(...fresh);
-      return { findings, fresh, overCap };
+      return { findings, fresh, notes, overCap };
     });
 
     const open = findings.filter((f) => f.status === "open");
-    const done = new Set(reviewed);
-    const files: Record<string, string> = {};
-    for (const d of diffs) {
-      const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
-      if (hash) files[d.path] = hash;
-    }
+    const files = nextFiles(diffs, scope, reviewed);
     const state: State = { head: pr.head.sha, score: score(open), findings, files };
 
     // A run stopped mid-post (deploy, kill) may have posted some of these on this head
@@ -318,7 +332,7 @@ async function main() {
     // New findings go inline where the diff allows; the rest go to the summary.
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline: InlineComment[] = [];
-    const outside: Tracked[] = [];
+    const outside: Tracked[] = [...notes];
     for (const f of fresh) {
       const id = posted.get(f.fp);
       if (id !== undefined) {
@@ -365,7 +379,7 @@ async function main() {
 
     if (dryRun) {
       for (const c of inline) log.line(`\n--- inline ${c.path}:${c.start_line ? `${c.start_line}-` : ""}${c.line}\n${c.body}`);
-      log.line(`\n--- summary\n${summaryBody(state, prev, outside, run)}`);
+      log.line(`\n--- summary\n${summaryBody(state, prev, outside, run, config.review.pass_score)}`);
       return;
     }
 
@@ -393,7 +407,7 @@ async function main() {
 
       // Save the new state right away. If the edit fails, a fresh summary beats losing the
       // state, which would make the next run post the same inline comments again.
-      const body = summaryBody(state, prev, outside, run);
+      const body = summaryBody(state, prev, outside, run, config.review.pass_score);
       const saved = summaryId !== undefined && (await gh.editComment(summaryId, body).then(() => true, () => false));
       if (!saved) summaryId = (await gh.comment(number, body)).id;
       stateSaved = true;
@@ -419,8 +433,8 @@ async function main() {
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
 
       // Files skipped, parts that failed, or candidates whose check failed: not a full review.
-      const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
-      const result = checkResult(state, run, `https://github.com/${repo}/pull/${number}#issuecomment-${summaryId}`, partial);
+      const partial = failedParts > 0 || checked.some((c) => !c.verdict) ? "incomplete" : skipped > 0 ? "skipped" : false;
+      const result = checkResult(state, run, `https://github.com/${repo}/pull/${number}#issuecomment-${summaryId}`, partial, config.review.pass_score);
       // One bad annotation fails the whole update; the check must not stay "in progress".
       const finished = checkId !== undefined && (await gh.updateCheck(checkId, { status: "completed", completed_at: new Date().toISOString(), ...result }).then(() => true, () => false));
       if (checkId !== undefined && !finished && result.output) await finishCheck({ ...result, output: { ...result.output, annotations: [] } });

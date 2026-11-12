@@ -16101,8 +16101,12 @@ var FileConfig = type({
     "ignore?": "string[]",
     "min_severity?": Severity,
     "max_findings?": "0 < number.integer <= 50",
-    /** On a push: `changed` re-reads only files whose diff changed, `all` re-reads the whole PR. */
-    "scope?": "'changed' | 'all'"
+    /** On a push: `changed` reviews only the lines changed since the last review, `all` the whole PR. */
+    "scope?": "'changed' | 'all'",
+    /** A finding on code the PR does not change: `drop` it, or list it in the `summary`. */
+    "outside_diff?": "'drop' | 'summary'",
+    /** The score at which the ReviewPilot check passes. */
+    "pass_score?": "1 | 2 | 3 | 4 | 5"
   },
   "rules?": Rule.array(),
   "instructions?": "string",
@@ -16133,7 +16137,9 @@ var DEFAULTS = {
     ],
     min_severity: "minor",
     max_findings: 20,
-    scope: "changed"
+    scope: "changed",
+    outside_diff: "drop",
+    pass_score: 5
   },
   rules: [],
   instructions: "",
@@ -16224,12 +16230,7 @@ function parseDiff(raw) {
 function anchor(file, start, end) {
   if (!file) return void 0;
   let last;
-  for (let n = end; n >= start; n--) {
-    if (file.commentable.has(n)) {
-      last = n;
-      break;
-    }
-  }
+  for (const n of file.commentable) if (n >= start && n <= end && (last === void 0 || n > last)) last = n;
   if (last === void 0) return void 0;
   const first = start < last && file.commentable.has(start) && file.hunkOf.get(start) === file.hunkOf.get(last) ? start : void 0;
   return first === void 0 ? { line: last } : { line: last, startLine: first };
@@ -16264,6 +16265,48 @@ var diff = (root, from, to, ignore) => git(
   ".",
   ...ignore.map((g) => `:(glob,exclude)${g}`)
 );
+async function changedSince(root, from, to, ignore) {
+  const raw = await git(
+    root,
+    "-c",
+    "core.quotePath=off",
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "-M",
+    "--unified=0",
+    from,
+    to,
+    "--",
+    ".",
+    ...ignore.map((g) => `:(glob,exclude)${g}`)
+  );
+  const lines = /* @__PURE__ */ new Map();
+  let file;
+  let header = false;
+  for (const text of raw.split("\n")) {
+    if (text.startsWith("diff --git ")) {
+      header = true;
+      file = void 0;
+      continue;
+    }
+    if (header && text.startsWith("+++ ")) {
+      const path = text.slice(4);
+      file = path === "/dev/null" ? void 0 : /* @__PURE__ */ new Set();
+      if (file) lines.set(unquote(path).replace(/^b\//, ""), file);
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(text);
+    if (!hunk) continue;
+    header = false;
+    if (!file) continue;
+    const start = Number(hunk[1]);
+    const count2 = hunk[2] === void 0 ? 1 : Number(hunk[2]);
+    if (count2 === 0) for (const n of [start, start + 1]) file.add(Math.max(1, n));
+    for (let n = start; n < start + count2; n++) file.add(n);
+  }
+  return lines;
+}
 var readAt = (root, ref, path) => git(root, "show", `${ref}:${path}`).catch((e) => {
   if (/does not exist in|exists on disk, but not in/.test(e.stderr ?? "")) return void 0;
   throw e;
@@ -16486,8 +16529,9 @@ function createLlm(opts) {
           // "none" leaves the parameter out, for providers that reject it.
           ...sendEffort ? { reasoning_effort: opts.effort } : {}
         }),
-        // At least 60s even past the deadline: the forced final call must still get an answer.
-        signal: AbortSignal.timeout(Math.max(6e4, Math.min(opts.timeoutMs ?? 24e4, left())))
+        // Never past the deadline for a normal turn (at least 60s), but the forced final call gets
+        // two minutes even past it: that answer is the part's whole result.
+        signal: AbortSignal.timeout(Math.max(force ? 12e4 : 6e4, Math.min(opts.timeoutMs ?? 24e4, left())))
       }).catch((e) => ({ ok: false, status: 0, error: e }));
       const retryable = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);
       if (retryable && attempt < 4 && left() > 15e3) {
@@ -16623,7 +16667,17 @@ var tokens = (t) => {
   const share = Math.floor(t.cached / t.prompt * 100);
   return `${count(t.prompt)} tokens in${share > 0 ? `, ${share}% cached` : ""}`;
 };
-function checkResult(state, run2, summaryUrl, partial) {
+function blockers(state, pass = 5) {
+  const open = state.findings.filter((f) => f.status === "open");
+  if (!open.length) return "";
+  const counts = SEVERITIES.flatMap((s) => {
+    const n = open.filter((f) => f.severity === s).length;
+    return n ? [`${n} ${s}`] : [];
+  }).join(", ");
+  if (state.score >= pass) return `**Passes at ${pass}/5.** Still open: ${counts}.`;
+  return `**Not ${pass}/5 because of:** ${counts}. Fix them, or reply to a finding (or resolve its thread) to dismiss it.`;
+}
+function checkResult(state, run2, summaryUrl, partial, pass = 5) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const annotations = open.slice(0, 50).map((f) => ({
     path: f.file,
@@ -16636,12 +16690,14 @@ function checkResult(state, run2, summaryUrl, partial) {
     message: clean(f.body).slice(0, 4e3)
   }));
   return {
-    conclusion: state.score < 5 ? "failure" : partial ? "neutral" : "success",
+    conclusion: state.score < pass || partial === "incomplete" ? "failure" : partial === "skipped" ? "neutral" : "success",
     details_url: summaryUrl,
     output: {
       title: `${state.score}/5${partial ? " (partial)" : ""} \xB7 ${open.length} open \xB7 ${duration(run2.seconds)}`,
       summary: [
-        `**${state.score}/5** on ${run2.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        `**${state.score}/5** on ${run2.head.slice(0, 7)}${pass < 5 && state.score >= pass ? ` (passes at ${pass}/5)` : ""}. [Full summary](${summaryUrl}).`,
+        ...blockers(state, pass) ? ["", blockers(state, pass)] : [],
+        ...partial === "incomplete" ? ["", "**The review did not finish**, so it cannot pass: part of the diff or some checks failed. Comment `/review` to retry."] : [],
         ...run2.warning ? ["", `> ${run2.warning}`] : [],
         ...open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : [],
         "",
@@ -16651,7 +16707,7 @@ function checkResult(state, run2, summaryUrl, partial) {
     }
   };
 }
-function summaryBody(state, prev, outside, run2) {
+function summaryBody(state, prev, outside, run2, pass = 5) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const fixed = state.findings.filter((f) => f.status === "fixed" && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
   const fresh = open.filter((f) => !prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
@@ -16663,15 +16719,17 @@ function summaryBody(state, prev, outside, run2) {
   }
   lines.push("");
   if (open.length) {
+    lines.push(blockers(state, pass), "");
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
     for (const f of open.filter((o) => !outside.includes(o))) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {
     lines.push("No verified issues.");
   }
-  if (outside.length) {
-    lines.push("", "**Outside the changed lines**", "");
-    for (const f of outside) lines.push(`- **${flat(f.title)}** (${link(f)}, ${f.severity}): ${flat(f.body)}`);
-  }
+  const item = (f) => `- **${flat(f.title)}** (${link(f)}, ${f.severity}): ${flat(f.body)}`;
+  const unposted = outside.filter((f) => state.findings.includes(f));
+  const info = outside.filter((f) => !state.findings.includes(f));
+  if (unposted.length) lines.push("", "**Could not be posted inline**", "", ...unposted.map(item));
+  if (info.length) lines.push("", "**Outside the changed lines** (for information, not scored)", "", ...info.map(item));
   if (fixed.length) {
     lines.push("", `<details><summary>Fixed since last review (${fixed.length})</summary>
 `);
@@ -16834,7 +16892,17 @@ async function runAgent(opts) {
         content: `You are out of time. Call ${name} now with what you have so far.`
       });
     }
-    const reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : void 0, opts.deadline);
+    let reply;
+    try {
+      reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : void 0, opts.deadline);
+    } catch (e) {
+      const aborted = e instanceof Error && /: HTTP 0 /.test(e.message);
+      if (warned || !aborted || Date.now() < opts.deadline - 5e3) throw e;
+      opts.log(`turn cut off at the deadline, submitting: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+      warned = true;
+      messages.push({ role: "user", content: `You are out of time. Call ${name} now with what you have so far.` });
+      continue;
+    }
     messages.push(reply);
     const calls = reply.tool_calls ?? [];
     if (!calls.length) {
@@ -16948,9 +17016,11 @@ Go through every changed file in your part. Look for:
 - unhandled cases: null or empty input, error paths, retries, races, partial failure
 - security and privacy: injection, XSS, SSRF, path traversal, missing auth or ownership checks, secrets in code or logs, one user's data reaching another, trusting client input
 - data: schema or stored-data changes without a migration or backfill, data loss, breaking existing records or older clients
-- what the change misses: a caller, type, config or code path that the new behaviour should have updated but did not
+- what the change misses: a caller, type, config or code path that the new behaviour should have updated but did not (report it on the changed line whose behaviour needs it)
 - inconsistency with how the same thing is done elsewhere in this repository
 - the repository rules, if any are given
+
+Report only on the lines this PR changes (and, where a file says so, only the lines changed since the last review). Read any other code you need for context, but a problem in code the PR does not change is out of scope.
 
 Do not report: formatting, naming or style; "add tests" or "add logging" as generic advice; problems that existed before this PR in code it does not touch; behaviour that a test in the diff or a code comment says is intended. That last exemption never covers security or privacy: if the intended behaviour itself lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, report it.
 
@@ -16966,7 +17036,7 @@ Check, in order:
 1. The cited lines exist at the PR head and say what the finding claims.
 2. Trace the trigger: follow the input through the actual code to the wrong result. Open every function, type and caller on the way. Do not assume what any of them do.
 3. Look for anything that already prevents it: a guard, early return, validation, type constraint, a caller that never passes that input, or a test or comment in the PR showing the behaviour is intended. Intent does not clear a security or privacy problem: if the intended behaviour lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, it still counts.
-4. The PR introduced it: the lines are added or changed in the diff, or the diff changed something they depend on.
+4. The PR introduced it, on a line the PR adds or changes. If the problem shows on a changed line other than the one cited (for example the call site that breaks), give that line.
 
 Claims about external tools, package versions, APIs or platform behaviour are only provable when the repository itself shows the problem (a lockfile, a test, docs or code in the repo). Your memory of a tool's current version or config keys can be out of date: reject such a claim if the repository cannot confirm it.
 
@@ -17015,7 +17085,53 @@ function chunk(diffs, size) {
   if (current.length) parts.push(current);
   return parts;
 }
-var focus = (diffs, seen) => seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
+function focus(diffs, seen, since) {
+  const fresh = /* @__PURE__ */ new Map();
+  if (!seen) return { scope: [...diffs], fresh, changed: new Set(diffs.map((d) => d.path)) };
+  const changed = new Set(diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)).map((d) => d.path));
+  const scope2 = diffs.filter((d) => {
+    const before = seen[d.path];
+    if (!changed.has(d.path)) return false;
+    if (before === void 0 || !since) return true;
+    const lines = new Set([...since.get(d.path) ?? []].filter((n) => d.commentable.has(n)));
+    if (!lines.size) return false;
+    fresh.set(d.path, lines);
+    return true;
+  });
+  return { scope: scope2, fresh, changed };
+}
+function nextFiles(diffs, scope2, reviewed) {
+  const done = new Set(reviewed);
+  const inScope = new Set(scope2.map((d) => d.path));
+  return Object.fromEntries(diffs.filter((d) => !inScope.has(d.path) || done.has(d.path)).map((d) => [d.path, diffHash(d.numbered)]));
+}
+function reportable(f, limits) {
+  if (!inFile(f.file, limits)) return false;
+  const lo = Math.min(f.line, f.endLine);
+  const hi = Math.max(f.line, f.endLine);
+  const hits = (lines) => [...lines].some((n) => n >= lo && n <= hi);
+  const d = limits.diffs.find((x) => x.path === f.file);
+  if (!d || !hits(d.commentable)) return limits.outside === "summary";
+  const fresh = limits.fresh.get(f.file);
+  if (fresh) return hits(fresh);
+  return !limits.incremental || limits.scope.some((x) => x.path === f.file);
+}
+function inFile(file, limits) {
+  if (limits.outside === "summary" || limits.fresh.has(file)) return true;
+  if (limits.incremental && !limits.scope.some((d) => d.path === file)) return false;
+  return limits.diffs.some((d) => d.path === file);
+}
+function ranges(lines) {
+  const sorted = [...lines].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i] ?? 0;
+    let end = start;
+    while (sorted[i + 1] === end + 1) end = sorted[++i] ?? end;
+    out.push(start === end ? `${start}` : `${start}-${end}`);
+  }
+  return out.join(", ");
+}
 function stale(f, changed) {
   const cited = [f.file, ...f.evidence.flatMap((e) => e.match(PATH_TOKEN) ?? [])].map((p) => p.replace(/^\.\//, ""));
   return cited.some((c) => [...changed].some((p) => c === p || p.endsWith(`/${c}`) || c.endsWith(`/${p}`)));
@@ -17052,8 +17168,13 @@ ${input2.pr.body.slice(0, 4e3) || "(none)"}`,
 ${all}`,
       `Your part (${i + 1} of ${chunks.length}). Diff, left column is the line number at the PR head; + added, - removed:
 
-${part.map((d) => `## ${d.path} (${d.status})
-${d.numbered}`).join("\n\n")}`
+${part.map((d) => {
+        const fresh = input2.limits.fresh.get(d.path);
+        const note = fresh ? `
+Changed since the last review: lines ${ranges(fresh)}. Report only problems on these lines; the rest of this diff was reviewed before and is here as context.` : "";
+        return `## ${d.path} (${d.status})${note}
+${d.numbered}`;
+      }).join("\n\n")}`
     ].join("\n\n");
     return runAgent({
       llm: input2.find,
@@ -17078,10 +17199,12 @@ ${d.numbered}`).join("\n\n")}`
   const ruleIds = new Set(input2.rules.map((r) => r.id));
   const candidates = parts.flatMap((p) => p?.findings ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input2.root, c.file).then(Boolean)));
-  const found = candidates.filter((_, i) => exists[i]).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
-  if (found.length < candidates.length) log2(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
+  const real = candidates.filter((_, i) => exists[i]);
+  if (real.length < candidates.length) log2(`find: dropped ${candidates.length - real.length} candidates citing files not in the repo`);
+  const found = real.filter((c) => inFile(c.file, input2.limits)).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
+  if (found.length < real.length) log2(`find: dropped ${real.length - found.length} candidates in files this review does not cover`);
   log2(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
-  const changedPaths = new Set(input2.scope.map((d) => d.path));
+  const changedPaths = input2.changed;
   const recheck = open.filter((p) => diffs.some((d) => d.path === p.file));
   const due = recheck.filter((p) => stale(p, changedPaths));
   if (due.length < recheck.length) log2(`verify: ${recheck.length - due.length} earlier findings kept as they were, their code did not change`);
@@ -17326,7 +17449,12 @@ ${text}` : "";
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
     const seen = comment || config.review.scope === "all" ? void 0 : prev?.files;
-    const scope2 = focus(diffs, seen);
+    const since = seen && prev && prev.head !== pr.head.sha ? await changedSince(root, prev.head, pr.head.sha, config.review.ignore).catch((e) => {
+      log.warn(`Could not diff against the last reviewed commit, so changed files are read whole: ${String(e)}`);
+      return void 0;
+    }) : void 0;
+    const { scope: scope2, fresh: freshLines, changed } = focus(diffs, seen, since);
+    const limits = { diffs, scope: scope2, fresh: freshLines, incremental: seen !== void 0, outside: config.review.outside_diff };
     const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase(
       "Review",
       () => review({
@@ -17340,10 +17468,12 @@ ${text}` : "";
         diffs,
         scope: scope2,
         previous,
+        limits,
+        changed,
         log: log.line
       })
     );
-    const { findings, fresh, overCap } = await log.phase("Merge", async () => {
+    const { findings, fresh, notes, overCap } = await log.phase("Merge", async () => {
       const findings2 = previous.map((p) => {
         if (p.status !== "open") return p;
         const c = checked.find((x) => x.previous === p);
@@ -17352,15 +17482,21 @@ ${text}` : "";
         const { line, endLine, severity } = settle(p, c.verdict);
         return { ...p, line, endLine, severity };
       });
-      const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank).sort(bySeverity);
+      const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank && reportable(f, limits)).sort(bySeverity);
       const known = findings2.filter((t) => t.status !== "fixed");
       const fresh2 = [];
+      const notes2 = [];
+      const byPath2 = new Map(diffs.map((d) => [d.path, d]));
       let overCap2 = 0;
       for (const f of await dedupe(find, root, confirmed, known, log.line)) {
         const base = fingerprint(f);
         const clash = [...findings2, ...fresh2].find((t) => t.fp === base && t.status !== "fixed" && Math.abs(t.line - f.line) > 20);
         const fp = clash ? fingerprint({ file: f.file, title: `${f.title}@${f.line}` }) : base;
-        if ([...known, ...fresh2].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if ([...known, ...fresh2, ...notes2].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if (config.review.outside_diff === "summary" && !anchor(byPath2.get(f.file), f.line, f.endLine)) {
+          notes2.push({ ...f, fp, status: "open" });
+          continue;
+        }
         if (fresh2.length >= config.review.max_findings) {
           overCap2 += 1;
           continue;
@@ -17370,15 +17506,10 @@ ${text}` : "";
         fresh2.push({ ...f, fp, status: "open" });
       }
       findings2.push(...fresh2);
-      return { findings: findings2, fresh: fresh2, overCap: overCap2 };
+      return { findings: findings2, fresh: fresh2, notes: notes2, overCap: overCap2 };
     });
     const open = findings.filter((f) => f.status === "open");
-    const done = new Set(reviewed);
-    const files = {};
-    for (const d of diffs) {
-      const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
-      if (hash) files[d.path] = hash;
-    }
+    const files = nextFiles(diffs, scope2, reviewed);
     const state = { head: pr.head.sha, score: score(open), findings, files };
     const comments = !dryRun && fresh.length ? await gh.reviewComments(number2).catch((e) => {
       log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
@@ -17387,7 +17518,7 @@ ${text}` : "";
     const posted = postedOnHead(comments, pr.head.sha, ours);
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline = [];
-    const outside = [];
+    const outside = [...notes];
     for (const f of fresh) {
       const id = posted.get(f.fp);
       if (id !== void 0) {
@@ -17434,7 +17565,7 @@ ${text}` : "";
 ${c.body}`);
       log.line(`
 --- summary
-${summaryBody(state, prev, outside, run2)}`);
+${summaryBody(state, prev, outside, run2, config.review.pass_score)}`);
       return;
     }
     if (stopping) return;
@@ -17455,7 +17586,7 @@ ${summaryBody(state, prev, outside, run2)}`);
           outside.push(...fresh.filter((f) => !outside.includes(f) && !posted.has(f.fp)));
         }
       }
-      const body = summaryBody(state, prev, outside, run2);
+      const body = summaryBody(state, prev, outside, run2, config.review.pass_score);
       const saved = summaryId !== void 0 && await gh.editComment(summaryId, body).then(() => true, () => false);
       if (!saved) summaryId = (await gh.comment(number2, body)).id;
       stateSaved = true;
@@ -17476,8 +17607,8 @@ ${summaryBody(state, prev, outside, run2)}`);
         if (!resolved) unresolved += 1;
       });
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
-      const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
-      const result = checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`, partial);
+      const partial = failedParts > 0 || checked.some((c) => !c.verdict) ? "incomplete" : skipped > 0 ? "skipped" : false;
+      const result = checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`, partial, config.review.pass_score);
       const finished = checkId !== void 0 && await gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...result }).then(() => true, () => false);
       if (checkId !== void 0 && !finished && result.output) await finishCheck({ ...result, output: { ...result.output, annotations: [] } });
     });

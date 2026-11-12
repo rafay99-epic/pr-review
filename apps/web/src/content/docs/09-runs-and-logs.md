@@ -34,6 +34,6 @@ Stopping is safe: a run that has not started posting puts the previous summary b
 
 ## When something fails
 
-- A part of the diff that could not be reviewed is named in the summary as a partial review.
+- A part of the diff that could not be reviewed is named in the summary, and the check fails until `/review` finishes it. When an agent runs out of time it submits what it found so far instead of losing the part.
 - A failed or stopped run restores the previous summary, or says what happened.
 - If saving the summary fails, a fresh one is posted rather than losing state.

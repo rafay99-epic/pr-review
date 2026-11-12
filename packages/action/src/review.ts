@@ -104,9 +104,11 @@ Go through every changed file in your part. Look for:
 - unhandled cases: null or empty input, error paths, retries, races, partial failure
 - security and privacy: injection, XSS, SSRF, path traversal, missing auth or ownership checks, secrets in code or logs, one user's data reaching another, trusting client input
 - data: schema or stored-data changes without a migration or backfill, data loss, breaking existing records or older clients
-- what the change misses: a caller, type, config or code path that the new behaviour should have updated but did not
+- what the change misses: a caller, type, config or code path that the new behaviour should have updated but did not (report it on the changed line whose behaviour needs it)
 - inconsistency with how the same thing is done elsewhere in this repository
 - the repository rules, if any are given
+
+Report only on the lines this PR changes (and, where a file says so, only the lines changed since the last review). Read any other code you need for context, but a problem in code the PR does not change is out of scope.
 
 Do not report: formatting, naming or style; "add tests" or "add logging" as generic advice; problems that existed before this PR in code it does not touch; behaviour that a test in the diff or a code comment says is intended. That last exemption never covers security or privacy: if the intended behaviour itself lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, report it.
 
@@ -123,7 +125,7 @@ Check, in order:
 1. The cited lines exist at the PR head and say what the finding claims.
 2. Trace the trigger: follow the input through the actual code to the wrong result. Open every function, type and caller on the way. Do not assume what any of them do.
 3. Look for anything that already prevents it: a guard, early return, validation, type constraint, a caller that never passes that input, or a test or comment in the PR showing the behaviour is intended. Intent does not clear a security or privacy problem: if the intended behaviour lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, it still counts.
-4. The PR introduced it: the lines are added or changed in the diff, or the diff changed something they depend on.
+4. The PR introduced it, on a line the PR adds or changes. If the problem shows on a changed line other than the one cited (for example the call site that breaks), give that line.
 
 Claims about external tools, package versions, APIs or platform behaviour are only provable when the repository itself shows the problem (a lockfile, a test, docs or code in the repo). Your memory of a tool's current version or config keys can be out of date: reject such a claim if the repository cannot confirm it.
 
@@ -176,11 +178,100 @@ export function chunk(diffs: readonly FileDiff[], size: number): FileDiff[][] {
 }
 
 /**
- * The files the find pass reads: those whose diff changed since the last review (`seen` maps
- * path to diffHash). With no record, every file is read.
+ * What the find pass reads, and where it may report. With no record of a last review (`seen`
+ * maps path to diffHash) it reads every file. Otherwise only files whose diff changed, and in
+ * those only the lines changed since the last reviewed commit (`since`, from git) are `fresh`:
+ * the rest of the diff was reviewed before and is context. A file never fully read is read
+ * whole; one whose diff only moved (the base changed under it) is skipped.
  */
-export const focus = (diffs: readonly FileDiff[], seen: Readonly<Record<string, string>> | undefined) =>
-  seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
+export function focus(
+  diffs: readonly FileDiff[],
+  seen: Readonly<Record<string, string>> | undefined,
+  since?: ReadonlyMap<string, ReadonlySet<number>>,
+): { scope: FileDiff[]; fresh: Map<string, Set<number>>; changed: Set<string> } {
+  const fresh = new Map<string, Set<number>>();
+  if (!seen) return { scope: [...diffs], fresh, changed: new Set(diffs.map((d) => d.path)) };
+  // Every file whose diff moved, even one with no new lines (a reverted hunk): its earlier
+  // findings still need checking against the new code.
+  const changed = new Set(diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)).map((d) => d.path));
+  const scope = diffs.filter((d) => {
+    const before = seen[d.path];
+    if (!changed.has(d.path)) return false;
+    if (before === undefined || !since) return true;
+    const lines = new Set([...(since.get(d.path) ?? [])].filter((n) => d.commentable.has(n)));
+    if (!lines.size) return false;
+    fresh.set(d.path, lines);
+    return true;
+  });
+  return { scope, fresh, changed };
+}
+
+/**
+ * The per-file record the next run compares against: the current diffHash of every file this
+ * run read, or had nothing new to read in (focus left it out). A file it should have read but
+ * did not (a failed part) gets no record, so the next run reads it whole.
+ */
+export function nextFiles(diffs: readonly FileDiff[], scope: readonly FileDiff[], reviewed: readonly string[]): Record<string, string> {
+  const done = new Set(reviewed);
+  const inScope = new Set(scope.map((d) => d.path));
+  return Object.fromEntries(diffs.filter((d) => !inScope.has(d.path) || done.has(d.path)).map((d) => [d.path, diffHash(d.numbered)]));
+}
+
+/** Where this run may report: the PR's diff, narrowed on a push to what changed since the last review. */
+export type Limits = {
+  diffs: readonly FileDiff[];
+  scope: readonly FileDiff[];
+  fresh: ReadonlyMap<string, ReadonlySet<number>>;
+  /** True on a push after an earlier review: files outside `scope` were already reviewed. */
+  incremental: boolean;
+  outside: "drop" | "summary";
+};
+
+/**
+ * Whether a new finding is in bounds: on lines changed since the last review when the file
+ * has them, never in a file this push did not touch, and on the PR's changed lines unless
+ * the repo asks for findings outside the diff in the summary. Agents may read anything for
+ * context; they may only report on the PR.
+ */
+export function reportable(f: Pick<Finding, "file" | "line" | "endLine">, limits: Limits): boolean {
+  if (!inFile(f.file, limits)) return false;
+  const lo = Math.min(f.line, f.endLine);
+  const hi = Math.max(f.line, f.endLine);
+  // By the set, not the range: a model-written end line can be huge.
+  const hits = (lines: ReadonlySet<number>) => [...lines].some((n) => n >= lo && n <= hi);
+  const d = limits.diffs.find((x) => x.path === f.file);
+  // Off the PR's diff: only as an unscored note, and only when the repo asks for those.
+  if (!d || !hits(d.commentable)) return limits.outside === "summary";
+  // On the diff: on a push, only lines changed since the last review count; the rest of the
+  // diff was reviewed before, so findings there are dropped in either mode.
+  const fresh = limits.fresh.get(f.file);
+  if (fresh) return hits(fresh);
+  return !limits.incremental || limits.scope.some((x) => x.path === f.file);
+}
+
+/**
+ * The file-level half of reportable: whether this run may report in the file at all. Used
+ * before verification, where a line a few off may still be moved onto a changed line.
+ */
+export function inFile(file: string, limits: Limits): boolean {
+  // With outside_diff: summary any file may hold a note; reportable decides by line.
+  if (limits.outside === "summary" || limits.fresh.has(file)) return true;
+  if (limits.incremental && !limits.scope.some((d) => d.path === file)) return false;
+  return limits.diffs.some((d) => d.path === file);
+}
+
+/** "12-15, 40" for a set of line numbers. */
+export function ranges(lines: ReadonlySet<number>): string {
+  const sorted = [...lines].sort((a, b) => a - b);
+  const out: string[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i] ?? 0;
+    let end = start;
+    while (sorted[i + 1] === end + 1) end = sorted[++i] ?? end;
+    out.push(start === end ? `${start}` : `${start}-${end}`);
+  }
+  return out.join(", ");
+}
 
 /**
  * Whether an earlier finding needs the verifier again: only when its file, or a file its
@@ -224,6 +315,10 @@ export type ReviewInput = {
   scope: readonly FileDiff[];
   /** Findings from earlier runs: open ones are re-checked, dismissed ones are not raised again. */
   previous: readonly Tracked[];
+  /** Where new findings may land (see reportable). */
+  limits: Limits;
+  /** Files whose diff moved since the last review: their earlier findings are checked again. */
+  changed: ReadonlySet<string>;
   log: (line: string) => void;
 };
 
@@ -259,7 +354,13 @@ export async function review(
       ...history,
       `All files changed in the PR:\n${all}`,
       `Your part (${i + 1} of ${chunks.length}). Diff, left column is the line number at the PR head; + added, - removed:\n\n${part
-        .map((d) => `## ${d.path} (${d.status})\n${d.numbered}`)
+        .map((d) => {
+          const fresh = input.limits.fresh.get(d.path);
+          const note = fresh
+            ? `\nChanged since the last review: lines ${ranges(fresh)}. Report only problems on these lines; the rest of this diff was reviewed before and is here as context.`
+            : "";
+          return `## ${d.path} (${d.status})${note}\n${d.numbered}`;
+        })
         .join("\n\n")}`,
     ].join("\n\n");
     return runAgent({
@@ -289,16 +390,20 @@ export async function review(
   const ruleIds = new Set(input.rules.map((r) => r.id));
   const candidates = parts.flatMap((p) => p?.findings ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input.root, c.file).then(Boolean)));
-  const found = candidates
-    .filter((_, i) => exists[i])
+  const real = candidates.filter((_, i) => exists[i]);
+  if (real.length < candidates.length) log(`find: dropped ${candidates.length - real.length} candidates citing files not in the repo`);
+  // Candidates in files this run cannot report in are dropped before verification. Line-level
+  // bounds wait until after it, since the verifier may move a finding onto a changed line.
+  const found = real
+    .filter((c) => inFile(c.file, input.limits))
     .map(({ rule, ...c }) => (rule && ruleIds.has(rule) ? { ...c, rule } : c))
     .sort(bySeverity);
-  if (found.length < candidates.length) log(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
+  if (found.length < real.length) log(`find: dropped ${real.length - found.length} candidates in files this review does not cover`);
   log(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
 
   // An earlier finding is re-checked only when its file is in the PR's diff (without it the
   // verifier cannot tell, and a rejection would wrongly mark it fixed) and its code changed.
-  const changedPaths = new Set(input.scope.map((d) => d.path));
+  const changedPaths = input.changed;
   const recheck = open.filter((p) => diffs.some((d) => d.path === p.file));
   const due = recheck.filter((p) => stale(p, changedPaths));
   if (due.length < recheck.length) log(`verify: ${recheck.length - due.length} earlier findings kept as they were, their code did not change`);
