@@ -104,6 +104,7 @@ test("failedDeliveries picks recent deliveries that only ever timed out or got a
       d("7", "f", 502, 12, "installation"), // not an event we act on
       d("8", "g", 202, 12, "issue_comment"), // delivered
       d("9", "h", 401, 12), // refused on purpose (bad signature): never resent
+      d("10", "i", 202, 5), d("11", "i", 502, 12), // got through before the window: done
     ],
     since,
   );
@@ -126,6 +127,7 @@ test("sealedKeyOf reads sealed_key from the config, ignoring line breaks", () =>
   assert.equal(sealedKeyOf(": not yaml : :"), undefined);
   assert.match(String(Object.values(sealedKeyOf(`sealed_key: ${"A".repeat(2000)}`) ?? {})[0]), /not a sealed key/);
   assert.match(String(Object.values(sealedKeyOf(`sealed_key: x\npad: "${"a".repeat(300_000)}"`) ?? {})[0]), /too large/);
+  assert.match(String(Object.values(sealedKeyOf(`pad: "${"a".repeat(300_000)}"\nsealed_key: x`) ?? {})[0]), /too large/);
   assert.equal(sealedKeyOf(undefined), undefined);
 });
 

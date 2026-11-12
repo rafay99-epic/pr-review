@@ -86,6 +86,8 @@ Then mint the App's token before the review step:
         with:
           app-id: ${{ secrets.REVIEWPILOT_APP_ID }}
           private-key: ${{ secrets.REVIEWPILOT_PRIVATE_KEY }}
+      - if: steps.app.outcome == 'failure'
+        run: echo "::warning::Could not mint the ReviewPilot App token; posting as github-actions[bot]. Check the App ID, the private key and that the App is installed."
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -96,7 +98,7 @@ Then mint the App's token before the review step:
           bot_login: ${{ steps.app.outputs.app-slug && format('{0}[bot]', steps.app.outputs.app-slug) || 'github-actions[bot]' }}
 ```
 
-If the key is revoked or the App is uninstalled, the run falls back to `github.token` instead of failing. A summary written earlier by `github-actions[bot]` is taken over on the next run.
+If the key is revoked or the App is uninstalled, the run falls back to `github.token` instead of failing, and the run shows a warning so the fallback is not silent. A summary written earlier by `github-actions[bot]` is taken over on the next run.
 
 </li>
 </ol>

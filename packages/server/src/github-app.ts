@@ -19,13 +19,16 @@ const EVENTS = new Set(["pull_request", "issue_comment"]);
  * server answered with a 2xx or 4xx was handled or refused on purpose. GitHub never retries.
  */
 export function failedDeliveries(list: readonly Delivery[], since: number): Delivery[] {
+  // Every attempt of a delivery counts, even ones before the window: one that ever got through
+  // or was refused is done. The window only limits which deliveries are still worth resending.
   const attempts = new Map<string, Delivery[]>();
   for (const d of list) {
-    if (EVENTS.has(d.event) && Date.parse(d.delivered_at) >= since) attempts.set(d.guid, [...(attempts.get(d.guid) ?? []), d]);
+    if (EVENTS.has(d.event)) attempts.set(d.guid, [...(attempts.get(d.guid) ?? []), d]);
   }
   return [...attempts.values()]
     .filter((tries) => tries.every((t) => t.status_code === 0 || t.status_code >= 500))
-    .map((tries) => tries.reduce((a, b) => (BigInt(a.id) > BigInt(b.id) ? a : b)));
+    .map((tries) => tries.reduce((a, b) => (BigInt(a.id) > BigInt(b.id) ? a : b)))
+    .filter((newest) => Date.parse(newest.delivered_at) >= since);
 }
 
 const b64url = (text: string) => Buffer.from(text).toString("base64url");

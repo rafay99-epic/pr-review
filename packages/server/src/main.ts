@@ -155,11 +155,17 @@ function run(job: Job): Run {
       await rm(partial, { recursive: true, force: true });
       await rm(dir, { recursive: true, force: true });
       const token = await app.token(job.installation);
-      await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, partial], {
-        env: gitEnv(token),
-        signal: cloning.signal,
-        timeout: CLONE_TIMEOUT_MS,
-      });
+      try {
+        await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, partial], {
+          env: gitEnv(token),
+          signal: cloning.signal,
+          timeout: CLONE_TIMEOUT_MS,
+        });
+      } catch (e) {
+        // A failed or stopped clone's half-made folder goes now, not when disk runs low.
+        await rm(partial, { recursive: true, force: true });
+        throw e;
+      }
       await rename(partial, dir);
     }
     // Last used now, for the clone cleanup at startup.

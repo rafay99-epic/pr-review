@@ -63,7 +63,7 @@ export function sealedKeyOf(configText: string | undefined): string | Unreadable
   if (!configText) return undefined;
   // The file is repo-written: a huge one is not parsed, so it cannot cost the server on every push.
   if (configText.length > MAX_CONFIG_CHARS) {
-    return /^\s*sealed_key\s*:/m.test(configText.slice(0, MAX_CONFIG_CHARS)) ? { unreadable: ".reviewpilot.yml is too large to read" } : undefined;
+    return /^\s*sealed_key\s*:/m.test(configText) ? { unreadable: ".reviewpilot.yml is too large to read" } : undefined;
   }
   let raw: unknown;
   try {
