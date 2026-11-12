@@ -41,7 +41,8 @@ jobs:
       - name: Seal key matches the website
         if: github.repository == 'rafay99-epic/reviewpilot'
         run: |
-          app=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
+          app=$(sed -n 's/^app *= *["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/p' fly.toml)
+          [ -n "$app" ] || { echo "::error::could not read app from fly.toml"; exit 1; }
           curl -fsS --retry 5 --retry-all-errors "https://$app.fly.dev/seal-key" -o served.pem \
             || { echo "::error::$app has no SEAL_KEY (or /seal-key failed); sealed keys cannot be opened"; exit 1; }
           diff served.pem apps/web/public/seal-key.pem \
