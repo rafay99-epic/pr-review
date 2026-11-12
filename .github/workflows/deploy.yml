@@ -53,4 +53,4 @@ jobs:
             curl -fsS https://reviewpilotbot.rafay99.com/seal-key.pem -o site.pem && diff -q site.pem served.pem && exit 0
             sleep 30
           done
-          echo "::error::the website's seal-key.pem does not match SEAL_KEY on $app"; exit 1
+          echo "::error::the website's seal-key.pem does not match SEAL_KEY on $app, or could not be fetched"; exit 1

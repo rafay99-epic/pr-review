@@ -41,6 +41,7 @@ Sealing encrypts the key so only the hosted server can read it, only for reposit
 Prefer the terminal? This gives the same result:
 
 ```sh
+read -rsp "Model key: " MODEL_KEY; echo   # typed, not saved in shell history
 OWNER=your-account
 PROVIDER_URL=https://api.commandcode.ai/provider/v1   # your provider's base URL
 OWNER_ID=$(curl -fsS https://api.github.com/users/$OWNER | jq -e .id) &&

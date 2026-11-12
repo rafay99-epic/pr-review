@@ -51,6 +51,8 @@ export const publicPem = (privateKey: KeyObject) => createPublicKey(privateKey).
 const MAX_SEALED_CHARS = 1024;
 /** Config files past this are not parsed for a key. */
 const MAX_CONFIG_CHARS = 256 * 1024;
+/** `sealed_key:` as a top-level key (column 0), not inside another value, for files that cannot be parsed. */
+const TOP_LEVEL_KEY = /^sealed_key\s*:/m;
 
 /** A sealed_key that is there but cannot be read, with why: reported, never treated as absent. */
 export type Unreadable = { unreadable: string };
@@ -63,13 +65,13 @@ export function sealedKeyOf(configText: string | undefined): string | Unreadable
   if (!configText) return undefined;
   // The file is repo-written: a huge one is not parsed, so it cannot cost the server on every push.
   if (configText.length > MAX_CONFIG_CHARS) {
-    return /^\s*sealed_key\s*:/m.test(configText) ? { unreadable: ".reviewpilot.yml is too large to read" } : undefined;
+    return TOP_LEVEL_KEY.test(configText) ? { unreadable: ".reviewpilot.yml is too large to read" } : undefined;
   }
   let raw: unknown;
   try {
     raw = parse(configText);
   } catch {
-    return /^\s*sealed_key\s*:/m.test(configText) ? { unreadable: ".reviewpilot.yml is not valid YAML, so its sealed_key cannot be read; fix the file" } : undefined;
+    return TOP_LEVEL_KEY.test(configText) ? { unreadable: ".reviewpilot.yml is not valid YAML, so its sealed_key cannot be read; fix the file" } : undefined;
   }
   if (!raw || typeof raw !== "object" || !("sealed_key" in raw)) return undefined;
   const value = raw.sealed_key;

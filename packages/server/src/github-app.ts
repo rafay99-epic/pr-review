@@ -10,6 +10,9 @@ const App = type({ slug: "string" });
 const Delivery = type({ id: "string", guid: "string", delivered_at: "string", status_code: "number", event: "string" });
 export type Delivery = typeof Delivery.infer;
 
+/** A delivery that failed this many times is left alone: whatever breaks it is not a blip. */
+const MAX_TRIES = 3;
+
 /** Events the server acts on; failed deliveries of others are not worth redelivering. */
 const EVENTS = new Set(["pull_request", "issue_comment"]);
 
@@ -26,7 +29,7 @@ export function failedDeliveries(list: readonly Delivery[], since: number): Deli
     if (EVENTS.has(d.event)) attempts.set(d.guid, [...(attempts.get(d.guid) ?? []), d]);
   }
   return [...attempts.values()]
-    .filter((tries) => tries.every((t) => t.status_code === 0 || t.status_code >= 500))
+    .filter((tries) => tries.length <= MAX_TRIES && tries.every((t) => t.status_code === 0 || t.status_code >= 500))
     .map((tries) => tries.reduce((a, b) => (BigInt(a.id) > BigInt(b.id) ? a : b)))
     .filter((newest) => Date.parse(newest.delivered_at) >= since);
 }
@@ -92,10 +95,14 @@ export function createApp(appId: string, privateKey: string) {
         const next = /<https:\/\/api\.github\.com([^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1];
         path = oldest && Date.parse(oldest.delivered_at) >= since ? next : undefined;
       }
-      // One refused resend does not stop the others; each is tried again next round.
+      // One at a time, so a large backlog never bursts GitHub's API. One refused resend does not
+      // stop the others; each is tried again next round.
       const failed = failedDeliveries(list, since);
-      const results = await Promise.all(failed.map((d) => request("POST", `/app/hook/deliveries/${d.id}/attempts`).then((r) => r.ok, () => false)));
-      const refused = results.filter((ok) => !ok).length;
+      let refused = 0;
+      for (const d of failed) {
+        const ok = await request("POST", `/app/hook/deliveries/${d.id}/attempts`).then((r) => r.ok, () => false);
+        if (!ok) refused++;
+      }
       return { resent: failed.length - refused, refused };
     },
   };

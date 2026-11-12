@@ -31,8 +31,10 @@ const SECRET = required("WEBHOOK_SECRET");
 const API_KEY = process.env.REVIEWPILOT_API_KEY || undefined;
 /** Opens keys that repos seal for this server. Without it, sealed keys are not accepted. */
 const SEAL_KEY = process.env.SEAL_KEY ? createPrivateKey(process.env.SEAL_KEY.replace(/\\n/g, "\n")) : undefined;
-/** Where the "add your model key" check sends people. */
-const KEY_DOCS = process.env.KEY_DOCS_URL ?? "https://reviewpilotbot.rafay99.com/docs/#hosted";
+/** The docs the setup checks link to: the hosted bot guide for keys, the questions for the rest. */
+const DOCS = process.env.DOCS_URL ?? "https://reviewpilotbot.rafay99.com/docs/";
+const KEY_DOCS = `${DOCS}#hosted`;
+const HELP_DOCS = `${DOCS}#faq`;
 const app = createApp(required("APP_ID"), required("PRIVATE_KEY").replace(/\\n/g, "\n"));
 const DATA = process.env.DATA_DIR ?? "/data";
 const ACTION = process.env.ACTION_PATH ?? join(import.meta.dirname, "action.mjs");
@@ -223,7 +225,7 @@ function run(job: Job): Run {
         const reason = (e instanceof Error ? e.message : String(e)).split("\n")[0]?.slice(0, 200) ?? "";
         void (async () => {
           const api = repoApi(await app.token(job.installation), job.repo);
-          await api.blocked(await api.headSha(job.number), "ReviewPilot could not start", `Starting the review kept failing, usually because GitHub was briefly unavailable. Last error: \`${reason}\`.\n\nComment \`/review\` to try again.`, KEY_DOCS);
+          await api.blocked(await api.headSha(job.number), "ReviewPilot could not start", `Starting the review kept failing. Last error: \`${reason}\`.\n\nComment \`/review\` to try again.`, HELP_DOCS);
         })().catch((err: unknown) => say(key, `could not report the failure: ${String(err)}`));
       }
     })

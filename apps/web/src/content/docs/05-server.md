@@ -139,7 +139,7 @@ The form on this site seals for the hosted server only. Without `REVIEWPILOT_API
 | `REPOS` | empty | Repositories that may use `REVIEWPILOT_API_KEY`: `owner/*` and `owner/repo` entries, comma separated. Empty means every installed repository |
 | `REVIEWPILOT_API_KEY` | none | The server's own model key. Without it, every repository needs a sealed key |
 | `SEAL_KEY` | none | Private key that opens sealed keys. Without it, sealed keys are refused |
-| `KEY_DOCS_URL` | the hosted bot guide | Where the **Add your model key** check links to |
+| `DOCS_URL` | this site's docs | Where the **Add your model key** and **could not start** checks link to |
 | `DEBOUNCE_MS` | `60000` | Quiet time after a push before the review starts |
 | `IDLE_EXIT_MS` | `600000` | Idle time before the process exits and the machine stops |
 | `DATA_DIR` | `/data` | Where clones and pending jobs live |
