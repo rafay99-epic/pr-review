@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import { createQueue, type Job } from "./queue.ts";
-import { generateKeyPairSync } from "node:crypto";
+import { constants, generateKeyPairSync, publicEncrypt } from "node:crypto";
 import { seal, sealedKeyOf, unseal } from "./model-key.ts";
 import { allowedRepo, toJob, verify } from "./webhook.ts";
 
@@ -61,6 +61,9 @@ test("a sealed key opens only on its server, for its owner, toward an https prov
   assert.match(String(Object.values(unseal(privateKey, blob, "thief"))[0]), /belongs to me/);
   assert.ok("missing" in unseal(pair().privateKey, blob, "me"));
   assert.ok("missing" in unseal(privateKey, "not base64 at all", "me"));
+  const raw = (text: string) => publicEncrypt({ key: publicKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, Buffer.from(text)).toString("base64");
+  assert.match(String(Object.values(unseal(privateKey, raw("not json"), "me"))[0]), /expected format/);
+  assert.match(String(Object.values(unseal(privateKey, raw('{"v":1,"owner":"me"}'), "me"))[0]), /expected format/);
   assert.ok("missing" in unseal(privateKey, seal(publicKey, { v: 1, owner: "me", key: "sk-1", base_url: "http://evil.test" }), "me"));
 });
 

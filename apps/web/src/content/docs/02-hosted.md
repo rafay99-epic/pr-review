@@ -90,6 +90,8 @@ When a repository has the App but no usable key, the PR gets a **ReviewPilot** c
 | this repository has no model key yet | Add `sealed_key` to `.reviewpilot.yml` on the default branch |
 | the sealed key belongs to *another-account* | You sealed it for a different account. Seal it again with the account that owns this repository |
 | the sealed key could not be opened | It was sealed for a different server, or got cut while pasting. Seal it again and paste the whole block |
+| the sealed key is not in the expected format | It was sealed by hand with a mistake in the JSON. Use the form above, or copy the `printf` line exactly |
+| this server does not accept sealed keys | The server you installed is not set up for sealed keys (a self-hosted one without `SEAL_KEY`). Ask its owner |
 | the sealed key's base_url must be an https URL | Seal it again with an `https://` provider URL |
 
 ## What the hosted server sees

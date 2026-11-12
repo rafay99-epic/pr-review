@@ -44,14 +44,20 @@ export function sealedKeyOf(configText: string | undefined): string | undefined 
 
 /** Opens a sealed key for a repo of `owner`, or says why it cannot be used. */
 export function unseal(privateKey: KeyObject, blob: string, owner: string): ModelKey {
-  let payload: Sealed;
+  let text: string;
   try {
-    const out = Sealed(JSON.parse(privateDecrypt({ key: privateKey, ...OAEP }, Buffer.from(blob, "base64")).toString("utf8")));
-    if (out instanceof type.errors) return { missing: "the sealed key is not in the expected format; seal it again" };
-    payload = out;
+    text = privateDecrypt({ key: privateKey, ...OAEP }, Buffer.from(blob, "base64")).toString("utf8");
   } catch {
     return { missing: "the sealed key could not be opened; it was sealed for a different server, or it is damaged" };
   }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    raw = undefined;
+  }
+  const payload = Sealed(raw);
+  if (payload instanceof type.errors) return { missing: "the sealed key is not in the expected format; seal it again" };
   if (payload.owner.toLowerCase() !== owner.toLowerCase()) {
     return { missing: `the sealed key belongs to ${payload.owner}, not ${owner}; seal your own key for ${owner}` };
   }

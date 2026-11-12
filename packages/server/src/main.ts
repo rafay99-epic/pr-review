@@ -103,6 +103,17 @@ function run(job: Job): Run {
 
   const done = (async () => {
     const started = Date.now();
+    // The key comes first: a repo that has none is never cloned, so installing the App alone
+    // cannot fill the volume. It needs only the GitHub API, not the clone.
+    const model = await modelKey(job.repo, await app.token(job.installation));
+    if ("missing" in model) {
+      say(key, `no model key: ${model.missing}`);
+      if (stopped) return;
+      // Nothing to review with: the PR says what to do instead of staying silent.
+      const api = repoApi(await app.token(job.installation), job.repo);
+      await api.blocked(await api.headSha(job.number), "Add your model key", `ReviewPilot did not run: ${model.missing}.\n\nSee [Add your model key](${KEY_DOCS}).`, KEY_DOCS);
+      return;
+    }
     const dir = join(DATA, "repos", slug(job.repo));
     if (!existsSync(join(dir, ".git"))) {
       say(key, "cloning");
@@ -123,14 +134,6 @@ function run(job: Job): Run {
     await utimes(dir, new Date(), new Date());
     // Minted after the clone, so the review gets the token's full hour (MAX_RUN_MS is below it).
     const [token, login] = await Promise.all([app.token(job.installation), app.login()]);
-    const model = await modelKey(job.repo, token);
-    if ("missing" in model) {
-      // Nothing to review with: the PR says what to do instead of staying silent.
-      say(key, `no model key: ${model.missing}`);
-      const api = repoApi(token, job.repo);
-      await api.blocked(await api.headSha(job.number), "Add your model key", `ReviewPilot did not run: ${model.missing}.\n\nSee [Add your model key](${KEY_DOCS}).`, KEY_DOCS);
-      return;
-    }
     // A run killed mid-checkout can leave the lock behind; runs on one repo never overlap.
     await rm(join(dir, ".git", "index.lock"), { force: true });
     const eventPath = join(DATA, "events", `${slug(key)}.json`);
