@@ -15,7 +15,7 @@ The diff is split into parts of about 25,000 characters. Each part goes to its o
 
 The agent opens callers, types and guards as it needs them, then submits every specific suspicion. It must list each changed file it checked; a submission that skips one is sent back.
 
-Findings must be on lines the PR changes. Agents can open any file for context, but a problem in code the PR does not touch is dropped, not posted and not scored (`review.outside_diff: summary` lists those in the summary instead).
+Findings must be on lines the PR changes. Agents can open any file for context, but a problem in code the PR does not touch is dropped, not posted and not scored (`review.outside_diff: summary` lists those in the summary for information, still unscored).
 
 On a push, the find pass reviews only the lines changed since the last reviewed commit; the rest of the diff was reviewed already and is shown as context. So a fix is reviewed for itself, and the review settles instead of finding new nits in old code every round. A file the agent did not get to is read whole next time. `/review` always reads the whole PR, and `review.scope: all` makes every push do the same.
 

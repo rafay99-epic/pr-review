@@ -35,25 +35,35 @@ export const diff = (root: string, from: string, to: string, ignore: readonly st
 
 /**
  * New-side lines (at `to`) each file changed between two commits: added lines, and for a pure
- * deletion the line where the removed code was. Throws when `from` is not in the clone.
+ * deletion the lines around where the removed code was. Throws when `from` is not in the clone.
  */
 export async function changedSince(root: string, from: string, to: string, ignore: readonly string[]): Promise<Map<string, Set<number>>> {
   const raw = await git(root, "-c", "core.quotePath=off", "diff", "--no-color", "--no-ext-diff", "-M", "--unified=0", from, to, "--", ".",
     ...ignore.map((g) => `:(glob,exclude)${g}`));
   const lines = new Map<string, Set<number>>();
   let file: Set<number> | undefined;
+  // Header lines only count before a file's first hunk: inside one, an added line "++ x" reads "+++ x".
+  let header = false;
   for (const text of raw.split("\n")) {
-    if (text.startsWith("+++ ")) {
+    if (text.startsWith("diff --git ")) {
+      header = true;
+      file = undefined;
+      continue;
+    }
+    if (header && text.startsWith("+++ ")) {
       const path = text.slice(4);
       file = path === "/dev/null" ? undefined : new Set();
       if (file) lines.set(unquote(path).replace(/^b\//, ""), file);
       continue;
     }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(text);
-    if (!hunk || !file) continue;
+    if (!hunk) continue;
+    header = false;
+    if (!file) continue;
     const start = Number(hunk[1]);
     const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
-    if (count === 0) file.add(Math.max(1, start));
+    // A pure deletion: the lines on both sides of where the code was.
+    if (count === 0) for (const n of [start, start + 1]) file.add(Math.max(1, n));
     for (let n = start; n < start + count; n++) file.add(n);
   }
   return lines;

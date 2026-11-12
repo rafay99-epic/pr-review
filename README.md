@@ -138,7 +138,7 @@ review:
   min_severity: minor           # minor | major | critical
   max_findings: 20
   scope: changed                # changed: a push reviews only lines changed since the last review | all: the whole PR
-  outside_diff: drop            # drop findings on code the PR does not change | summary: list them
+  outside_diff: drop            # findings on code the PR does not change: drop | summary (listed, never scored)
   pass_score: 5                 # the check passes at this score
 
 # Read as repo guidance on every review (default: AGENTS.md and CLAUDE.md).

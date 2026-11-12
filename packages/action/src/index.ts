@@ -248,7 +248,7 @@ async function main() {
         return undefined;
       })
       : undefined;
-    const { scope, fresh: freshLines } = focus(diffs, seen, since);
+    const { scope, fresh: freshLines, changed } = focus(diffs, seen, since);
     const limits: Limits = { diffs, scope, fresh: freshLines, incremental: seen !== undefined, outside: config.review.outside_diff };
     const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase("Review", () =>
       review({
@@ -263,11 +263,12 @@ async function main() {
         scope,
         previous,
         limits,
+        changed,
         log: log.line,
       }),
     );
 
-    const { findings, fresh, overCap } = await log.phase("Merge", async () => {
+    const { findings, fresh, notes, overCap } = await log.phase("Merge", async () => {
       // Earlier open findings stay open, become fixed, or stay as they were when the check failed.
       const findings: Tracked[] = previous.map((p) => {
         if (p.status !== "open") return p;
@@ -303,15 +304,23 @@ async function main() {
         if (reopened >= 0) findings.splice(reopened, 1);
         fresh.push({ ...f, fp, status: "open" });
       }
-      findings.push(...fresh);
-      return { findings, fresh, overCap };
+      // With `outside_diff: summary`, a finding off the diff is listed for information only: it
+      // is not tracked, posted inline or scored, so it can never hold the PR below its pass score.
+      const byPath = new Map(diffs.map((d) => [d.path, d]));
+      const notes = config.review.outside_diff === "summary" ? fresh.filter((f) => !anchor(byPath.get(f.file), f.line, f.endLine)) : [];
+      const kept = fresh.filter((f) => !notes.includes(f));
+      findings.push(...kept);
+      return { findings, fresh: kept, notes, overCap };
     });
 
     const open = findings.filter((f) => f.status === "open");
     const done = new Set(reviewed);
+    const inScope = new Set(scope.map((d) => d.path));
     const files: Record<string, string> = {};
     for (const d of diffs) {
-      const hash = done.has(d.path) ? diffHash(d.numbered) : seen?.[d.path];
+      // A file this run should have read but did not (a failed part) loses its record, so the
+      // next run reads it whole instead of looking only at lines changed after this one.
+      const hash = done.has(d.path) ? diffHash(d.numbered) : inScope.has(d.path) ? undefined : seen?.[d.path];
       if (hash) files[d.path] = hash;
     }
     const state: State = { head: pr.head.sha, score: score(open), findings, files };
@@ -329,7 +338,7 @@ async function main() {
     // New findings go inline where the diff allows; the rest go to the summary.
     const byPath = new Map(diffs.map((d) => [d.path, d]));
     const inline: InlineComment[] = [];
-    const outside: Tracked[] = [];
+    const outside: Tracked[] = [...notes];
     for (const f of fresh) {
       const id = posted.get(f.fp);
       if (id !== undefined) {
@@ -376,7 +385,7 @@ async function main() {
 
     if (dryRun) {
       for (const c of inline) log.line(`\n--- inline ${c.path}:${c.start_line ? `${c.start_line}-` : ""}${c.line}\n${c.body}`);
-      log.line(`\n--- summary\n${summaryBody(state, prev, outside, run)}`);
+      log.line(`\n--- summary\n${summaryBody(state, prev, outside, run, config.review.pass_score)}`);
       return;
     }
 
@@ -404,7 +413,7 @@ async function main() {
 
       // Save the new state right away. If the edit fails, a fresh summary beats losing the
       // state, which would make the next run post the same inline comments again.
-      const body = summaryBody(state, prev, outside, run);
+      const body = summaryBody(state, prev, outside, run, config.review.pass_score);
       const saved = summaryId !== undefined && (await gh.editComment(summaryId, body).then(() => true, () => false));
       if (!saved) summaryId = (await gh.comment(number, body)).id;
       stateSaved = true;

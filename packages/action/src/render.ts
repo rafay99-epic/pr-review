@@ -70,14 +70,15 @@ const tokens = (t: Run["tokens"]) => {
  * Why the score is not 5/5, in one line a reader can act on: what is open, by severity, and
  * the two ways to clear it. Empty at 5/5.
  */
-export function blockers(state: State): string {
+export function blockers(state: State, pass: Score = 5): string {
   const open = state.findings.filter((f) => f.status === "open");
   if (!open.length) return "";
   const counts = SEVERITIES.flatMap((s) => {
     const n = open.filter((f) => f.severity === s).length;
     return n ? [`${n} ${s}`] : [];
-  });
-  return `**Not 5/5 because of:** ${counts.join(", ")}. Fix them, or reply to a finding (or resolve its thread) to dismiss it.`;
+  }).join(", ");
+  if (state.score >= pass) return `**Passes at ${pass}/5.** Still open: ${counts}.`;
+  return `**Not ${pass}/5 because of:** ${counts}. Fix them, or reply to a finding (or resolve its thread) to dismiss it.`;
 }
 
 /** The check passes at `pass` (the repo's review.pass_score) or above, and never on a partial review. */
@@ -100,7 +101,7 @@ export function checkResult(state: State, run: Run, summaryUrl: string, partial:
       title: `${state.score}/5${partial ? " (partial)" : ""} · ${open.length} open · ${duration(run.seconds)}`,
       summary: [
         `**${state.score}/5** on ${run.head.slice(0, 7)}${pass < 5 && state.score >= pass ? ` (passes at ${pass}/5)` : ""}. [Full summary](${summaryUrl}).`,
-        ...(blockers(state) ? ["", blockers(state)] : []),
+        ...(blockers(state, pass) ? ["", blockers(state, pass)] : []),
         ...(run.warning ? ["", `> ${run.warning}`] : []),
         ...(open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : []),
         "",
@@ -111,7 +112,7 @@ export function checkResult(state: State, run: Run, summaryUrl: string, partial:
   };
 }
 
-export function summaryBody(state: State, prev: State | undefined, outside: readonly Tracked[], run: Run): string {
+export function summaryBody(state: State, prev: State | undefined, outside: readonly Tracked[], run: Run, pass: Score = 5): string {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const fixed = state.findings.filter((f) => f.status === "fixed" && prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
   const fresh = open.filter((f) => !prev?.findings.some((p) => p.fp === f.fp && p.status === "open"));
@@ -126,17 +127,20 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
   lines.push("");
 
   if (open.length) {
-    lines.push(blockers(state), "");
+    lines.push(blockers(state, pass), "");
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
     for (const f of open.filter((o) => !outside.includes(o))) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {
     lines.push("No verified issues.");
   }
 
-  if (outside.length) {
-    lines.push("", "**Outside the changed lines**", "");
-    for (const f of outside) lines.push(`- **${flat(f.title)}** (${link(f)}, ${f.severity}): ${flat(f.body)}`);
-  }
+  // Below the table: tracked findings GitHub would not take inline (scored), and with
+  // `outside_diff: summary` findings off the diff (information only, never scored).
+  const item = (f: Tracked) => `- **${flat(f.title)}** (${link(f)}, ${f.severity}): ${flat(f.body)}`;
+  const unposted = outside.filter((f) => state.findings.includes(f));
+  const info = outside.filter((f) => !state.findings.includes(f));
+  if (unposted.length) lines.push("", "**Could not be posted inline**", "", ...unposted.map(item));
+  if (info.length) lines.push("", "**Outside the changed lines** (for information, not scored)", "", ...info.map(item));
   if (fixed.length) {
     lines.push("", `<details><summary>Fixed since last review (${fixed.length})</summary>\n`);
     for (const f of fixed) lines.push(`- ${flat(f.title)} (${f.file}:${f.line})`);

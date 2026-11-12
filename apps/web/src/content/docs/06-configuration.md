@@ -76,7 +76,7 @@ rules:
 | `review.min_severity` | `minor` `major` `critical` | `minor` | Findings below it are not posted |
 | `review.max_findings` | 1 to 50 | `20` | New findings posted per run, most severe first |
 | `review.scope` | `changed` `all` | `changed` | On a push, `changed` reviews only the lines changed since the last reviewed commit; `all` reviews the whole pull request every time. `/review` always reviews everything |
-| `review.outside_diff` | `drop` `summary` | `drop` | A finding on code the PR does not change: `drop` it (not posted, not scored), or list it in the summary |
+| `review.outside_diff` | `drop` `summary` | `drop` | A finding on code the PR does not change: `drop` it, or list it in the summary for information. Either way it is not posted inline and not scored |
 | `review.pass_score` | 1 to 5 | `5` | The score at which the ReviewPilot check passes |
 | `context_files` | path list | `[AGENTS.md, CLAUDE.md]` | Read as repository guidance, up to 10,000 characters in total across all files |
 | `instructions` | string | none | Extra guidance for every review |

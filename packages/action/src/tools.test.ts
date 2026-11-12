@@ -35,9 +35,13 @@ test("changedSince lists the new-side lines changed between two commits", async 
   const first = git("rev-parse", "HEAD");
   await writeFile(join(root, "a.ts"), "one\nTWO\nthree\nfour\nfive\n");
   await writeFile(join(root, "b.ts"), "x\nz\n");
-  git("commit", "-qam", "2");
+  // An added line that starts with "++ " reads "+++ ..." in the diff; it is not a file header.
+  await writeFile(join(root, "c.sql"), "++ new comment\n");
+  git("add", "."), git("commit", "-qm", "2");
   const lines = await changedSince(root, first, git("rev-parse", "HEAD"), []);
   assert.deepEqual([...(lines.get("a.ts") ?? [])].sort(), [2, 5]);
-  assert.deepEqual([...(lines.get("b.ts") ?? [])], [1]); // a pure deletion marks where the code was
+  assert.deepEqual([...(lines.get("b.ts") ?? [])].sort(), [1, 2]); // a pure deletion marks both sides of where the code was
+  assert.deepEqual([...(lines.get("c.sql") ?? [])], [1]);
+  assert.deepEqual([...lines.keys()].sort(), ["a.ts", "b.ts", "c.sql"]);
   await assert.rejects(changedSince(root, "0000000000000000000000000000000000000000", "HEAD", []));
 });
