@@ -47,6 +47,11 @@ export function seal(publicKey: KeyObject | string, payload: Sealed): string {
 /** The public half, to publish for sealing. */
 export const publicPem = (privateKey: KeyObject) => createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 
+/** A sealed key is one RSA-4096 block: 512 bytes, 684 base64 characters. Anything far longer is not one. */
+const MAX_SEALED_CHARS = 1024;
+/** Config files past this are not parsed for a key. */
+const MAX_CONFIG_CHARS = 256 * 1024;
+
 /** A sealed_key that is there but cannot be read, with why: reported, never treated as absent. */
 export type Unreadable = { unreadable: string };
 
@@ -56,6 +61,10 @@ export type Unreadable = { unreadable: string };
  */
 export function sealedKeyOf(configText: string | undefined): string | Unreadable | undefined {
   if (!configText) return undefined;
+  // The file is repo-written: a huge one is not parsed, so it cannot cost the server on every push.
+  if (configText.length > MAX_CONFIG_CHARS) {
+    return /^\s*sealed_key\s*:/m.test(configText.slice(0, MAX_CONFIG_CHARS)) ? { unreadable: ".reviewpilot.yml is too large to read" } : undefined;
+  }
   let raw: unknown;
   try {
     raw = parse(configText);
@@ -64,8 +73,9 @@ export function sealedKeyOf(configText: string | undefined): string | Unreadable
   }
   if (!raw || typeof raw !== "object" || !("sealed_key" in raw)) return undefined;
   const value = raw.sealed_key;
-  return typeof value === "string" && value.trim()
-    ? value.replace(/\s+/g, "")
+  const blob = typeof value === "string" ? value.replace(/\s+/g, "") : "";
+  return blob && blob.length <= MAX_SEALED_CHARS
+    ? blob
     : { unreadable: "sealed_key in .reviewpilot.yml is not a sealed key; paste the whole block the seal form gives you" };
 }
 

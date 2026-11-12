@@ -70,9 +70,10 @@ export function createApp(appId: string, privateKey: string) {
 
     /**
      * Asks GitHub to send again the deliveries that failed since `since`, such as the one that
-     * woke a stopped machine before the server was listening. Returns how many it asked for.
+     * woke a stopped machine before the server was listening. Returns how many were resent and
+     * how many GitHub refused (a refused one is tried again next round).
      */
-    async redeliverFailed(since: number): Promise<number> {
+    async redeliverFailed(since: number): Promise<{ resent: number; refused: number }> {
       // Newest first, a page at a time, back to `since` (capped: a busier window than this has
       // bigger problems than a lost delivery).
       const list: Delivery[] = [];
@@ -92,8 +93,7 @@ export function createApp(appId: string, privateKey: string) {
       const failed = failedDeliveries(list, since);
       const results = await Promise.all(failed.map((d) => request("POST", `/app/hook/deliveries/${d.id}/attempts`).then((r) => r.ok, () => false)));
       const refused = results.filter((ok) => !ok).length;
-      if (refused) throw new Error(`GitHub refused ${refused} of ${failed.length} redeliveries`);
-      return failed.length;
+      return { resent: failed.length - refused, refused };
     },
   };
 }

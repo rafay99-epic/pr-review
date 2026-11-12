@@ -321,7 +321,7 @@ async function start() {
   const redeliver = () =>
     void app
       .redeliverFailed(Date.now() - REDELIVER_WINDOW_MS)
-      .then((n) => n && console.log(`asked GitHub to redeliver ${n} failed webhook(s)`))
+      .then(({ resent, refused }) => (resent || refused) && console.log(`asked GitHub to redeliver ${resent} failed webhook(s)${refused ? `, ${refused} refused` : ""}`))
       .catch((e: unknown) => console.log(`could not check failed webhooks: ${e instanceof Error ? e.message : String(e)}`));
   setTimeout(redeliver, 15_000);
   setInterval(redeliver, 2 * 60_000).unref();

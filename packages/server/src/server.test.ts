@@ -124,6 +124,8 @@ test("sealedKeyOf reads sealed_key from the config, ignoring line breaks", () =>
   assert.match(String(Object.values(sealedKeyOf("sealed_key:\n") ?? {})[0]), /not a sealed key/);
   assert.match(String(Object.values(sealedKeyOf("sealed_key: |\n  abc\n bad: [indent") ?? {})[0]), /not valid YAML/);
   assert.equal(sealedKeyOf(": not yaml : :"), undefined);
+  assert.match(String(Object.values(sealedKeyOf(`sealed_key: ${"A".repeat(2000)}`) ?? {})[0]), /not a sealed key/);
+  assert.match(String(Object.values(sealedKeyOf(`sealed_key: x\npad: "${"a".repeat(300_000)}"`) ?? {})[0]), /too large/);
   assert.equal(sealedKeyOf(undefined), undefined);
 });
 
