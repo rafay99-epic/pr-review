@@ -183,4 +183,4 @@ REVIEWPILOT_API_KEY=... pnpm --filter @reviewpilot/action local owner/repo 123  
 
 ## My repos
 
-My repos are reviewed by the server: the ReviewPilot Bot App is installed on all of them and sends its webhooks to `reviewpilot-rafay` on Fly.io, so a new repo is covered without any setup. The old per-repo workflows (`caller.yml` calling `.github/workflows/review.yml`, added by `enable.sh`) are disabled.
+My repos are reviewed by the hosted server: the ReviewPilot Bot App is installed on all of them, so a new repo is covered without any setup. The old per-repo workflows (`caller.yml` calling `.github/workflows/review.yml`, added by `enable.sh`) are disabled.

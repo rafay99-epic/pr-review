@@ -1,5 +1,5 @@
 // The home page story, from the problem to the first review. Every number and example here
-// comes from real ReviewPilot runs (Lumo #182 and ReviewPilot's own PR #6).
+// comes from real ReviewPilot runs.
 
 import type { ReactNode } from "react";
 import { useActive, useCountUp } from "../hooks.ts";

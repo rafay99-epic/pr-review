@@ -65,4 +65,4 @@ Each finding as a comment on its line, with the evidence that proves it:
 
 And the **ReviewPilot** check, green only at 5/5, with each finding as an annotation:
 
-<figure><img src="/docs/check-run.webp" alt="The ReviewPilot check run: 4/5, 3 open, 8m 44s, with three annotations on their files and lines." width="1600" height="1184" loading="lazy" /><figcaption>Make the check required in a branch ruleset and nothing merges below 5/5.</figcaption></figure>
+<figure><img src="/docs/check-run.webp" alt="The ReviewPilot check run: score, time and tokens, with findings as annotations on their files and lines." width="1600" height="1498" loading="lazy" /><figcaption>Make the check required in a branch ruleset and nothing merges below 5/5.</figcaption></figure>
