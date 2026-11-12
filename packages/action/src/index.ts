@@ -289,13 +289,21 @@ async function main() {
       // that matches a fixed one was reintroduced: it replaces the fixed entry and posts again.
       const known = findings.filter((t) => t.status !== "fixed");
       const fresh: Tracked[] = [];
+      // With `outside_diff: summary`, a finding off the diff is listed for information only: it
+      // is not tracked, posted inline or scored, and it takes no slot under max_findings.
+      const notes: Tracked[] = [];
+      const byPath = new Map(diffs.map((d) => [d.path, d]));
       let overCap = 0;
       for (const f of await dedupe(find, root, confirmed, known, log.line)) {
         // Same title, same file, far apart: two different defects, so the fingerprint gets the line.
         const base = fingerprint(f);
         const clash = [...findings, ...fresh].find((t) => t.fp === base && t.status !== "fixed" && Math.abs(t.line - f.line) > 20);
         const fp = clash ? fingerprint({ file: f.file, title: `${f.title}@${f.line}` }) : base;
-        if ([...known, ...fresh].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if ([...known, ...fresh, ...notes].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if (config.review.outside_diff === "summary" && !anchor(byPath.get(f.file), f.line, f.endLine)) {
+          notes.push({ ...f, fp, status: "open" });
+          continue;
+        }
         if (fresh.length >= config.review.max_findings) {
           overCap += 1;
           continue;
@@ -304,13 +312,8 @@ async function main() {
         if (reopened >= 0) findings.splice(reopened, 1);
         fresh.push({ ...f, fp, status: "open" });
       }
-      // With `outside_diff: summary`, a finding off the diff is listed for information only: it
-      // is not tracked, posted inline or scored, so it can never hold the PR below its pass score.
-      const byPath = new Map(diffs.map((d) => [d.path, d]));
-      const notes = config.review.outside_diff === "summary" ? fresh.filter((f) => !anchor(byPath.get(f.file), f.line, f.endLine)) : [];
-      const kept = fresh.filter((f) => !notes.includes(f));
-      findings.push(...kept);
-      return { findings, fresh: kept, notes, overCap };
+      findings.push(...fresh);
+      return { findings, fresh, notes, overCap };
     });
 
     const open = findings.filter((f) => f.status === "open");
@@ -318,9 +321,10 @@ async function main() {
     const inScope = new Set(scope.map((d) => d.path));
     const files: Record<string, string> = {};
     for (const d of diffs) {
-      // A file this run should have read but did not (a failed part) loses its record, so the
-      // next run reads it whole instead of looking only at lines changed after this one.
-      const hash = done.has(d.path) ? diffHash(d.numbered) : inScope.has(d.path) ? undefined : seen?.[d.path];
+      // Read this run, or with nothing new to read (focus left it out): its current hash. A file
+      // this run should have read but did not (a failed part) loses its record, so the next
+      // run reads it whole instead of looking only at lines changed after this one.
+      const hash = inScope.has(d.path) && !done.has(d.path) ? undefined : diffHash(d.numbered);
       if (hash) files[d.path] = hash;
     }
     const state: State = { head: pr.head.sha, score: score(open), findings, files };

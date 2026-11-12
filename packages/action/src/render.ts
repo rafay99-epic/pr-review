@@ -62,13 +62,10 @@ const tokens = (t: Run["tokens"]) => {
 };
 
 /**
- * The ReviewPilot check's result: passes only at a full 5/5, the score in its title, and each
- * open finding as an annotation on its lines (GitHub takes up to 50 per update). A partial
- * review (files skipped, parts or checks that failed) is never green: 5/5 there is neutral.
- */
-/**
- * Why the score is not 5/5, in one line a reader can act on: what is open, by severity, and
- * the two ways to clear it. Empty at 5/5.
+ * What stands between the score and the pass score (review.pass_score), in one line a reader
+ * can act on: what is open, by severity, and the two ways to clear it. At or above the pass
+ * score with findings still open, it says the check passes and what is left. Empty when
+ * nothing is open.
  */
 export function blockers(state: State, pass: Score = 5): string {
   const open = state.findings.filter((f) => f.status === "open");
@@ -81,7 +78,12 @@ export function blockers(state: State, pass: Score = 5): string {
   return `**Not ${pass}/5 because of:** ${counts}. Fix them, or reply to a finding (or resolve its thread) to dismiss it.`;
 }
 
-/** The check passes at `pass` (the repo's review.pass_score) or above, and never on a partial review. */
+/**
+ * The ReviewPilot check's result: passes at `pass` (review.pass_score) or above, the score in
+ * its title, and each open finding as an annotation on its lines (GitHub takes up to 50 per
+ * update). A partial review (files skipped, parts or checks that failed) is never green: a
+ * passing score there is neutral.
+ */
 export function checkResult(state: State, run: Run, summaryUrl: string, partial: boolean, pass: Score = 5): CheckUpdate {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const annotations: Annotation[] = open.slice(0, 50).map((f) => ({

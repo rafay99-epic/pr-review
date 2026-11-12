@@ -16230,12 +16230,7 @@ function parseDiff(raw) {
 function anchor(file, start, end) {
   if (!file) return void 0;
   let last;
-  for (let n = end; n >= start; n--) {
-    if (file.commentable.has(n)) {
-      last = n;
-      break;
-    }
-  }
+  for (const n of file.commentable) if (n >= start && n <= end && (last === void 0 || n > last)) last = n;
   if (last === void 0) return void 0;
   const first = start < last && file.commentable.has(start) && file.hunkOf.get(start) === file.hunkOf.get(last) ? start : void 0;
   return first === void 0 ? { line: last } : { line: last, startLine: first };
@@ -17472,12 +17467,18 @@ ${text}` : "";
       const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank && reportable(f, limits)).sort(bySeverity);
       const known = findings2.filter((t) => t.status !== "fixed");
       const fresh2 = [];
+      const notes2 = [];
+      const byPath2 = new Map(diffs.map((d) => [d.path, d]));
       let overCap2 = 0;
       for (const f of await dedupe(find, root, confirmed, known, log.line)) {
         const base = fingerprint(f);
         const clash = [...findings2, ...fresh2].find((t) => t.fp === base && t.status !== "fixed" && Math.abs(t.line - f.line) > 20);
         const fp = clash ? fingerprint({ file: f.file, title: `${f.title}@${f.line}` }) : base;
-        if ([...known, ...fresh2].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if ([...known, ...fresh2, ...notes2].some((t) => t.fp === fp || sameIssue(t, f))) continue;
+        if (config.review.outside_diff === "summary" && !anchor(byPath2.get(f.file), f.line, f.endLine)) {
+          notes2.push({ ...f, fp, status: "open" });
+          continue;
+        }
         if (fresh2.length >= config.review.max_findings) {
           overCap2 += 1;
           continue;
@@ -17486,18 +17487,15 @@ ${text}` : "";
         if (reopened >= 0) findings2.splice(reopened, 1);
         fresh2.push({ ...f, fp, status: "open" });
       }
-      const byPath2 = new Map(diffs.map((d) => [d.path, d]));
-      const notes2 = config.review.outside_diff === "summary" ? fresh2.filter((f) => !anchor(byPath2.get(f.file), f.line, f.endLine)) : [];
-      const kept = fresh2.filter((f) => !notes2.includes(f));
-      findings2.push(...kept);
-      return { findings: findings2, fresh: kept, notes: notes2, overCap: overCap2 };
+      findings2.push(...fresh2);
+      return { findings: findings2, fresh: fresh2, notes: notes2, overCap: overCap2 };
     });
     const open = findings.filter((f) => f.status === "open");
     const done = new Set(reviewed);
     const inScope = new Set(scope2.map((d) => d.path));
     const files = {};
     for (const d of diffs) {
-      const hash = done.has(d.path) ? diffHash(d.numbered) : inScope.has(d.path) ? void 0 : seen?.[d.path];
+      const hash = inScope.has(d.path) && !done.has(d.path) ? void 0 : diffHash(d.numbered);
       if (hash) files[d.path] = hash;
     }
     const state = { head: pr.head.sha, score: score(open), findings, files };

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, type FileDiff, parseDiff, unquote } from "./diff.ts";
 import { blockers, checkResult, clean, summaryBody } from "./render.ts";
-import { chunk, focus, type Limits, ranges, reportable, settle, stale } from "./review.ts";
+import { chunk, focus, inFile, type Limits, ranges, reportable, settle, stale } from "./review.ts";
 import { diffHash, findingTag, fingerprint, postedOnHead, readState, score, STATE_BUDGET, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
@@ -187,6 +187,14 @@ test("new findings stay inside the PR, and inside the new lines on a push", () =
   assert.equal(at("old.ts", 5), false); // not touched by this push
   assert.equal(at("other.ts", 1), false); // not in the PR at all
   assert.equal(at("a.ts", 1, 1_000_000_000), true); // a huge range is checked by the set, not walked
+  // File-level bounds, applied before verification so a near miss can still be moved onto a changed line.
+  assert.equal(inFile("b.ts", limits), true); // has new lines
+  assert.equal(inFile("a.ts", limits), true); // read whole this run
+  assert.equal(inFile("old.ts", limits), false); // in the PR, but nothing new this push
+  assert.equal(inFile("other.ts", limits), false); // not in the PR
+  assert.equal(inFile("other.ts", { ...limits, incremental: false, outside: "summary" }), true);
+  // anchor finds the last changed line in a huge range without walking it.
+  assert.deepEqual(anchor({ ...file("a.ts", [3, 5]), hunkOf: new Map([[3, 0], [5, 0]]) }, 4, 1_000_000_000), { line: 5 });
   const summary: Limits = { ...limits, incremental: false, fresh: new Map(), outside: "summary" };
   assert.equal(reportable({ file: "other.ts", line: 1, endLine: 1 }, summary), true);
   assert.equal(reportable({ file: "a.ts", line: 9, endLine: 9 }, summary), true);
