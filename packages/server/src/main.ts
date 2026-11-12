@@ -1,18 +1,20 @@
 // ReviewPilot's webhook server. GitHub App deliveries become jobs; each job runs the action
-// bundle as a child process against a warm clone on the data volume. Jobs are saved to disk
+// bundle as a child process against a warm clone on the data volume, on the model key the
+// repo is entitled to (see model-key.ts). Jobs are saved to disk
 // until they finish, so a deploy or restart resumes them. The process exits after a quiet
 // spell and the platform starts it again on the next delivery, so it only costs while working.
 
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createPrivateKey, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { type } from "arktype";
-import { createApp } from "./github-app.ts";
+import { createApp, repoApi } from "./github-app.ts";
+import { type ModelKey, publicPem, sealedKeyOf, unseal } from "./model-key.ts";
 import { createQueue, type Job, keyOf, type Run } from "./queue.ts";
 import { allowedRepo, toJob, verify } from "./webhook.ts";
 
@@ -25,7 +27,12 @@ function required(name: string): string {
 }
 
 const SECRET = required("WEBHOOK_SECRET");
-const API_KEY = required("REVIEWPILOT_API_KEY");
+/** The server's own model key, for repos in REPOS. Without it every repo brings its own. */
+const API_KEY = process.env.REVIEWPILOT_API_KEY || undefined;
+/** Opens keys that repos seal for this server. Without it, sealed keys are not accepted. */
+const SEAL_KEY = process.env.SEAL_KEY ? createPrivateKey(process.env.SEAL_KEY.replace(/\\n/g, "\n")) : undefined;
+/** Where the "add your model key" check sends people. */
+const KEY_DOCS = process.env.KEY_DOCS_URL ?? "https://reviewpilotbot.rafay99.com/docs/#hosted";
 const app = createApp(required("APP_ID"), required("PRIVATE_KEY").replace(/\\n/g, "\n"));
 const DATA = process.env.DATA_DIR ?? "/data";
 const ACTION = process.env.ACTION_PATH ?? join(import.meta.dirname, "action.mjs");
@@ -43,6 +50,8 @@ const MAX_BODY = 25 * 1024 * 1024;
 const CLONE_TIMEOUT_MS = 10 * 60_000;
 /** Retries for a review that failed before it started, such as a GitHub outage. */
 const MAX_ATTEMPTS = 2;
+/** A clone unused this long is deleted at startup, so repos that left do not fill the volume. */
+const CLONE_TTL_MS = 14 * 24 * 60 * 60_000;
 
 const SavedJob = type({
   repo: "string",
@@ -68,6 +77,17 @@ const gitEnv = (token: string) => ({
   GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
   GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
 });
+
+/**
+ * The key a repo's reviews run on: its own sealed key first, then the server's key when REPOS
+ * covers the repo. `.reviewpilot.yml` is read from the default branch, so a PR cannot swap it.
+ */
+async function modelKey(repo: string, token: string): Promise<ModelKey> {
+  const sealed = sealedKeyOf(await repoApi(token, repo).file(".reviewpilot.yml"));
+  if (sealed) return SEAL_KEY ? unseal(SEAL_KEY, sealed, repo.split("/")[0] ?? "") : { missing: "this server does not accept sealed keys" };
+  if (API_KEY && allowedRepo(REPOS, repo)) return { key: API_KEY };
+  return { missing: "this repository has no model key yet" };
+}
 
 /** Runs one review: the clone (made once, reused after), then the action with a fresh token. */
 function run(job: Job): Run {
@@ -99,8 +119,18 @@ function run(job: Job): Run {
       });
       await rename(partial, dir);
     }
+    // Last used now, for the clone cleanup at startup.
+    await utimes(dir, new Date(), new Date());
     // Minted after the clone, so the review gets the token's full hour (MAX_RUN_MS is below it).
     const [token, login] = await Promise.all([app.token(job.installation), app.login()]);
+    const model = await modelKey(job.repo, token);
+    if ("missing" in model) {
+      // Nothing to review with: the PR says what to do instead of staying silent.
+      say(key, `no model key: ${model.missing}`);
+      const api = repoApi(token, job.repo);
+      await api.blocked(await api.headSha(job.number), "Add your model key", `ReviewPilot did not run: ${model.missing}.\n\nSee [Add your model key](${KEY_DOCS}).`, KEY_DOCS);
+      return;
+    }
     // A run killed mid-checkout can leave the lock behind; runs on one repo never overlap.
     await rm(join(dir, ".git", "index.lock"), { force: true });
     const eventPath = join(DATA, "events", `${slug(key)}.json`);
@@ -115,7 +145,8 @@ function run(job: Job): Run {
         GITHUB_WORKSPACE: dir,
         GITHUB_EVENT_PATH: eventPath,
         INPUT_GITHUB_TOKEN: token,
-        INPUT_API_KEY: API_KEY,
+        INPUT_API_KEY: model.key,
+        ...(model.baseUrl ? { INPUT_BASE_URL: model.baseUrl } : {}),
         INPUT_BOT_LOGIN: login,
         // No job timeout here, so agents get more time than in a workflow (see review.ts).
         REVIEWPILOT_FIND_SECONDS: "480",
@@ -183,6 +214,10 @@ let shuttingDown = false;
 
 const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/health") return void res.end("ok");
+  // The public half of SEAL_KEY, for sealing a key with openssl or the website.
+  if (req.method === "GET" && req.url === "/seal-key" && SEAL_KEY) {
+    return void res.writeHead(200, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" }).end(publicPem(SEAL_KEY));
+  }
   if (req.method !== "POST" || req.url !== "/webhook") return void res.writeHead(404).end();
 
   const chunks: Buffer[] = [];
@@ -199,7 +234,7 @@ const server = createServer(async (req, res) => {
   const event = req.headers["x-github-event"]?.toString() ?? "";
   let job: Job | undefined;
   try {
-    job = toJob(event, JSON.parse(body.toString("utf8")), REPOS);
+    job = toJob(event, JSON.parse(body.toString("utf8")));
   } catch {
     return void res.writeHead(400).end();
   }
@@ -212,6 +247,11 @@ const server = createServer(async (req, res) => {
 
 async function start() {
   for (const dir of ["jobs", "events", "repos"]) await mkdir(join(DATA, dir), { recursive: true });
+  for (const name of await readdir(join(DATA, "repos"))) {
+    const dir = join(DATA, "repos", name);
+    const used = await stat(dir).then((s) => s.mtimeMs, () => 0);
+    if (Date.now() - used > CLONE_TTL_MS) await rm(dir, { recursive: true, force: true });
+  }
   // Jobs left from before a restart run first, without waiting for a debounce.
   for (const name of await readdir(join(DATA, "jobs"))) {
     const file = join(DATA, "jobs", name);
@@ -219,15 +259,14 @@ async function start() {
     const saved = name.endsWith(".json")
       ? await readFile(file, "utf8").then((text) => SavedJob(JSON.parse(text)), () => undefined).catch(() => undefined)
       : undefined;
-    // Same gate as a fresh delivery: REPOS may have narrowed since the job was saved.
-    if (!saved || saved instanceof type.errors || !allowedRepo(REPOS, saved.repo)) {
+    if (!saved || saved instanceof type.errors) {
       await rm(file, { force: true });
       continue;
     }
     say(keyOf(saved), "resumed");
     queue.schedule({ ...saved, debounce: false });
   }
-  server.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log(`listening, repos: ${[...REPOS].join(", ") || "all installed"}`));
+  server.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log(`listening; server key for: ${API_KEY ? [...REPOS].join(", ") || "every repo" : "none"}; sealed keys: ${SEAL_KEY ? "accepted" : "off"}`));
 
   // Exit 0 when idle; the machine stops and the next delivery starts it again.
   setInterval(() => {

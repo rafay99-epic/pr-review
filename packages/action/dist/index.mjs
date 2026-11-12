@@ -16106,7 +16106,9 @@ var FileConfig = type({
   },
   "rules?": Rule.array(),
   "instructions?": "string",
-  "context_files?": "string[]"
+  "context_files?": "string[]",
+  /** A model key sealed for the hosted bot. Only the server reads it; the action ignores it. */
+  "sealed_key?": "string"
   // A typo like `min_severty` must be reported, not silently ignored.
 }).onDeepUndeclaredKey("reject");
 var DEFAULTS = {

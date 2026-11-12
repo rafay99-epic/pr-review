@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import { createQueue, type Job } from "./queue.ts";
-import { toJob, verify } from "./webhook.ts";
+import { generateKeyPairSync } from "node:crypto";
+import { seal, sealedKeyOf, unseal } from "./model-key.ts";
+import { allowedRepo, toJob, verify } from "./webhook.ts";
 
 const repository = { full_name: "me/app", owner: { login: "me" } };
 const installation = { id: 7 };
@@ -30,22 +32,44 @@ test("verify accepts only GitHub's HMAC of the exact body", () => {
 });
 
 test("toJob reviews non-draft, non-fork PRs by people, and /review from maintainers", () => {
-  const all = new Set<string>();
-  assert.deepEqual(toJob("pull_request", pr(), all), { repo: "me/app", number: 3, installation: 7, event: "pull_request", payload: pr(), debounce: true });
-  assert.equal(toJob("pull_request", pr({ draft: true }), all), undefined);
-  assert.equal(toJob("pull_request", pr({ user: { login: "teammate", type: "User" } }), all)?.repo, "me/app");
-  assert.equal(toJob("pull_request", pr({ user: { login: "dependabot[bot]", type: "Bot" } }), all), undefined);
-  assert.equal(toJob("pull_request", pr({ head: { repo: { full_name: "fork/app" } } }), all), undefined);
-  assert.equal(toJob("pull_request", { ...pr(), action: "closed" }, all), undefined);
-  assert.equal(toJob("issue_comment", comment("/review"), all)?.debounce, false);
-  assert.equal(toJob("issue_comment", comment("/reviewer"), all), undefined);
-  assert.equal(toJob("issue_comment", comment("/review", "COLLABORATOR"), all)?.repo, "me/app");
-  assert.equal(toJob("issue_comment", comment("/review", "CONTRIBUTOR"), all), undefined);
-  assert.equal(toJob("pull_request", pr(), new Set(["me/other"])), undefined);
-  assert.equal(toJob("pull_request", pr(), new Set(["me/app"]))?.repo, "me/app");
-  assert.equal(toJob("pull_request", pr(), new Set(["me/*"]))?.repo, "me/app");
-  assert.equal(toJob("pull_request", pr(), new Set(["other/*"])), undefined);
-  assert.equal(toJob("ping", {}, all), undefined);
+  assert.deepEqual(toJob("pull_request", pr()), { repo: "me/app", number: 3, installation: 7, event: "pull_request", payload: pr(), debounce: true });
+  assert.equal(toJob("pull_request", pr({ draft: true })), undefined);
+  assert.equal(toJob("pull_request", pr({ user: { login: "teammate", type: "User" } }))?.repo, "me/app");
+  assert.equal(toJob("pull_request", pr({ user: { login: "dependabot[bot]", type: "Bot" } })), undefined);
+  assert.equal(toJob("pull_request", pr({ head: { repo: { full_name: "fork/app" } } })), undefined);
+  assert.equal(toJob("pull_request", { ...pr(), action: "closed" }), undefined);
+  assert.equal(toJob("issue_comment", comment("/review"))?.debounce, false);
+  assert.equal(toJob("issue_comment", comment("/reviewer")), undefined);
+  assert.equal(toJob("issue_comment", comment("/review", "COLLABORATOR"))?.repo, "me/app");
+  assert.equal(toJob("issue_comment", comment("/review", "CONTRIBUTOR")), undefined);
+  assert.equal(toJob("ping", {}), undefined);
+});
+
+test("allowedRepo matches owner/repo and owner/* entries, empty for all", () => {
+  assert.equal(allowedRepo(new Set(), "me/app"), true);
+  assert.equal(allowedRepo(new Set(["me/app"]), "Me/App"), true);
+  assert.equal(allowedRepo(new Set(["me/*"]), "me/app"), true);
+  assert.equal(allowedRepo(new Set(["me/other", "other/*"]), "me/app"), false);
+});
+
+test("a sealed key opens only on its server, for its owner, toward an https provider", () => {
+  const pair = () => generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const { publicKey, privateKey } = pair();
+  const blob = seal(publicKey, { v: 1, owner: "me", key: "sk-1", base_url: "https://api.example.com/v1" });
+  assert.deepEqual(unseal(privateKey, blob, "Me"), { key: "sk-1", baseUrl: "https://api.example.com/v1" });
+  assert.deepEqual(unseal(privateKey, seal(publicKey, { v: 1, owner: "me", key: "sk-1" }), "me"), { key: "sk-1" });
+  assert.match(String(Object.values(unseal(privateKey, blob, "thief"))[0]), /belongs to me/);
+  assert.ok("missing" in unseal(pair().privateKey, blob, "me"));
+  assert.ok("missing" in unseal(privateKey, "not base64 at all", "me"));
+  assert.ok("missing" in unseal(privateKey, seal(publicKey, { v: 1, owner: "me", key: "sk-1", base_url: "http://evil.test" }), "me"));
+});
+
+test("sealedKeyOf reads sealed_key from the config, ignoring line breaks", () => {
+  assert.equal(sealedKeyOf("sealed_key: |\n  abc\n  def\nreview:\n  scope: all\n"), "abcdef");
+  assert.equal(sealedKeyOf("review:\n  scope: all\n"), undefined);
+  assert.equal(sealedKeyOf("sealed_key: [1]"), undefined);
+  assert.equal(sealedKeyOf(": not yaml : :"), undefined);
+  assert.equal(sealedKeyOf(undefined), undefined);
 });
 
 const job = (number: number, debounce = true, repo = "me/app"): Job => ({ repo, number, installation: 7, event: "pull_request", payload: {}, debounce });

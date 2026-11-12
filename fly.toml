@@ -1,7 +1,8 @@
 # ReviewPilot server on Fly.io. One machine with a volume for warm clones and pending jobs.
 # The server exits when idle (machine stops, nothing billed but the volume) and Fly starts it
 # again on the next webhook. Proxy auto-stop stays off: it would cut reviews running in the
-# background. Secrets (fly secrets set): WEBHOOK_SECRET, APP_ID, PRIVATE_KEY, REVIEWPILOT_API_KEY.
+# background. Secrets (fly secrets set): WEBHOOK_SECRET, APP_ID, PRIVATE_KEY, and optionally
+# REVIEWPILOT_API_KEY (the server's own model key) and SEAL_KEY (opens keys repos seal for it).
 app = "reviewpilot-rafay"
 primary_region = "iad"
 kill_signal = "SIGTERM"
@@ -11,9 +12,9 @@ kill_timeout = 150
 
 [env]
   DATA_DIR = "/data"
-  # Comma-separated allowlist of owner/repo or owner/* entries. Every repo of these accounts
-  # that has the App installed is reviewed, new ones included; other installations are
-  # ignored, so nobody else can spend the model key. Empty allows every installation.
+  # Comma-separated owner/repo or owner/* entries that may use REVIEWPILOT_API_KEY. Every repo
+  # of these accounts with the App installed is reviewed on it, new ones included. Any other
+  # repo needs its own sealed key, so nobody else can spend this one. Empty: every repo.
   REPOS = "rafay99-epic/*"
 
 [http_service]

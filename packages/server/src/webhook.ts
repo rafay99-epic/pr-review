@@ -1,6 +1,7 @@
 // Turns GitHub App webhook deliveries into review jobs. The gate matches the documented
 // workflow: non-draft PRs from branches in the repo itself (so their authors can push), never
-// from bots, and `/review` comments from owners, members and collaborators.
+// from bots, and `/review` comments from owners, members and collaborators. Which key a job
+// may spend is decided later, per repo (see model-key.ts).
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { type } from "arktype";
@@ -34,31 +35,26 @@ const CommentEvent = Base.and({
   comment: { body: "string", author_association: "string" },
 });
 
-/** Who may run `/review`: it spends the server's model key. */
+/** Who may run `/review`: it spends the repo's model key. */
 const MAINTAINERS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 const PR_ACTIONS = new Set(["opened", "reopened", "ready_for_review", "synchronize"]);
 
-/** Whether `repos` (lowercase `owner/repo` or `owner/*` entries, empty for all) covers a repo. */
+/** Whether `repos` (lowercase `owner/repo` or `owner/*` entries, empty for all) covers a repo: REPOS, the repos that may use the server's own key. */
 export function allowedRepo(repos: ReadonlySet<string>, repo: string): boolean {
   const name = repo.toLowerCase();
   return repos.size === 0 || repos.has(name) || repos.has(`${name.split("/")[0]}/*`);
 }
 
-/**
- * The job for a delivery, or undefined when it should not start a review. `repos` holds
- * lowercase `owner/repo` or `owner/*` entries; empty allows every installed repo.
- */
-export function toJob(event: string, payload: unknown, repos: ReadonlySet<string>): Job | undefined {
-  const allowed = (repo: string) => allowedRepo(repos, repo);
-
+/** The job for a delivery, or undefined when it should not start a review. */
+export function toJob(event: string, payload: unknown): Job | undefined {
   if (event === "pull_request") {
     const e = PullRequestEvent(payload);
     if (e instanceof type.errors) return undefined;
     const { pull_request: pr, repository: repo } = e;
     // A fork PR's author may have no access at all; bot PRs (Dependabot and friends) are skipped.
     const inRepo = pr.head.repo?.full_name === repo.full_name;
-    if (!PR_ACTIONS.has(e.action) || pr.draft || !inRepo || pr.user.type === "Bot" || !allowed(repo.full_name)) return undefined;
+    if (!PR_ACTIONS.has(e.action) || pr.draft || !inRepo || pr.user.type === "Bot") return undefined;
     // Pushes come in bursts; opened and ready_for_review wait too, so a quick follow-up push folds in.
     return { repo: repo.full_name, number: pr.number, installation: e.installation.id, event, payload, debounce: true };
   }
@@ -69,7 +65,7 @@ export function toJob(event: string, payload: unknown, repos: ReadonlySet<string
     const { issue, comment, repository: repo } = e;
     const command = /^\/review(\s|$)/.test(comment.body.trim());
     const ok = e.action === "created" && command && issue.pull_request !== undefined && issue.state === "open";
-    if (!ok || !MAINTAINERS.has(comment.author_association) || !allowed(repo.full_name)) return undefined;
+    if (!ok || !MAINTAINERS.has(comment.author_association)) return undefined;
     return { repo: repo.full_name, number: issue.number, installation: e.installation.id, event, payload, debounce: false };
   }
 
