@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # `off` for a server without SEAL_KEY (one that takes no sealed keys); see the last step.
+  SEALED_KEYS: required
+
 # Deploys never overlap; a newer push waits for the one in flight.
 concurrency:
   group: deploy-fly
@@ -35,11 +39,13 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       # The website seals keys with the committed public key; the server opens them with
-      # SEAL_KEY. If they ever differ, every sealed key fails, so the deploy fails loudly.
-      # A server without SEAL_KEY answers 404 and is skipped.
+      # SEAL_KEY. If the server lost SEAL_KEY or holds a different one, every sealed key fails,
+      # so the deploy fails loudly. A server that takes no sealed keys sets SEALED_KEYS: off.
       - name: Seal key matches the website
+        if: env.SEALED_KEYS != 'off'
         run: |
           app=$(sed -n 's/^app = "\(.*\)"/\1/p' fly.toml)
-          code=$(curl -sS -o served.pem -w '%{http_code}' --retry 5 --retry-all-errors "https://$app.fly.dev/seal-key")
-          if [ "$code" = 404 ]; then echo "no SEAL_KEY on $app, skipped"; exit 0; fi
-          diff served.pem apps/web/public/seal-key.pem
+          curl -fsS --retry 5 --retry-all-errors "https://$app.fly.dev/seal-key" -o served.pem \
+            || { echo "::error::$app has no SEAL_KEY (or /seal-key failed); sealed keys cannot be opened"; exit 1; }
+          diff served.pem apps/web/public/seal-key.pem \
+            || { echo "::error::SEAL_KEY on $app does not match apps/web/public/seal-key.pem"; exit 1; }

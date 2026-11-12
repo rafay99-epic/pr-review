@@ -42,8 +42,8 @@ Prefer the terminal? This gives the same result:
 
 ```sh
 OWNER=your-account
-OWNER_ID=$(curl -s https://api.github.com/users/$OWNER | jq .id)
-curl -s https://reviewpilotbot.rafay99.com/seal-key.pem -o seal-key.pem
+OWNER_ID=$(curl -fsS https://api.github.com/users/$OWNER | jq -e .id) &&
+curl -fsS https://reviewpilotbot.rafay99.com/seal-key.pem -o seal-key.pem &&
 printf '{"v":1,"owner":"%s","owner_id":%s,"key":"%s","base_url":"%s"}' \
   "$OWNER" "$OWNER_ID" "$MODEL_KEY" https://api.commandcode.ai/provider/v1 \
   | openssl pkeyutl -encrypt -pubin -inkey seal-key.pem \
