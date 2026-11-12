@@ -53,6 +53,8 @@ jq -nc --arg owner "$OWNER" --argjson id "$OWNER_ID" --arg key "$MODEL_KEY" \
   | base64 | tr -d '\n'
 ```
 
+If `openssl` says *data too large for key size*, the key and URL together are over 446 bytes, the most one sealed block holds. Use the provider's shortest base URL.
+
 </li>
 <li>
 

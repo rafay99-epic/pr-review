@@ -47,3 +47,10 @@ jobs:
             || { echo "::error::$app has no SEAL_KEY (or /seal-key failed); sealed keys cannot be opened"; exit 1; }
           diff served.pem apps/web/public/seal-key.pem \
             || { echo "::error::SEAL_KEY on $app does not match apps/web/public/seal-key.pem"; exit 1; }
+          # People seal against the website's copy, which Vercel deploys on its own; give it a
+          # few minutes to catch up after a change.
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS https://reviewpilotbot.rafay99.com/seal-key.pem -o site.pem && diff -q site.pem served.pem && exit 0
+            sleep 30
+          done
+          echo "::error::the website's seal-key.pem does not match SEAL_KEY on $app"; exit 1
