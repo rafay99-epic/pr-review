@@ -206,6 +206,17 @@ export function focus(
   return { scope, fresh, changed };
 }
 
+/**
+ * The per-file record the next run compares against: the current diffHash of every file this
+ * run read, or had nothing new to read in (focus left it out). A file it should have read but
+ * did not (a failed part) gets no record, so the next run reads it whole.
+ */
+export function nextFiles(diffs: readonly FileDiff[], scope: readonly FileDiff[], reviewed: readonly string[]): Record<string, string> {
+  const done = new Set(reviewed);
+  const inScope = new Set(scope.map((d) => d.path));
+  return Object.fromEntries(diffs.filter((d) => !inScope.has(d.path) || done.has(d.path)).map((d) => [d.path, diffHash(d.numbered)]));
+}
+
 /** Where this run may report: the PR's diff, narrowed on a push to what changed since the last review. */
 export type Limits = {
   diffs: readonly FileDiff[];

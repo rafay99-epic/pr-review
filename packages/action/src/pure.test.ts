@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, type FileDiff, parseDiff, unquote } from "./diff.ts";
 import { blockers, checkResult, clean, summaryBody } from "./render.ts";
-import { chunk, focus, inFile, type Limits, ranges, reportable, settle, stale } from "./review.ts";
+import { chunk, focus, inFile, type Limits, nextFiles, ranges, reportable, settle, stale } from "./review.ts";
 import { diffHash, findingTag, fingerprint, postedOnHead, readState, score, STATE_BUDGET, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
@@ -172,6 +172,17 @@ test("on a push, a changed file is reviewed only on the lines changed since the 
   assert.deepEqual([...changed].sort(), ["b.ts", "c.ts", "d.ts"]);
   // Without the last commit to compare against, changed files are read whole.
   assert.deepEqual(focus(diffs, seen, undefined).fresh.size, 0);
+});
+
+test("the next run's record: read files and files with nothing new keep a hash, unread ones lose it", () => {
+  const file = (path: string, numbered: string): FileDiff => ({ path, status: "modified", commentable: new Set(), hunkOf: new Map(), numbered });
+  const read = file("read.ts", "r");
+  const unread = file("failed.ts", "f");
+  const untouched = file("moved.ts", "m");
+  const files = nextFiles([read, unread, untouched], [read, unread], ["read.ts"]);
+  assert.deepEqual(files, { "read.ts": diffHash("r"), "moved.ts": diffHash("m") });
+  // With that record, the next push has nothing to re-read or re-check in moved.ts.
+  assert.equal(focus([untouched], files, new Map()).changed.size, 0);
 });
 
 test("new findings stay inside the PR, and inside the new lines on a push", () => {

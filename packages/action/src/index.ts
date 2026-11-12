@@ -11,9 +11,8 @@ import { type CheckUpdate, createGitHub, type InlineComment, type Thread } from 
 import { createLlm } from "./llm.ts";
 import { createLog, seconds } from "./log.ts";
 import { bySeverity, checkResult, inlineBody, PROGRESS, progressBody, summaryBody } from "./render.ts";
-import { dedupe, focus, type Limits, pool, reportable, review, settle } from "./review.ts";
+import { dedupe, focus, type Limits, nextFiles, pool, reportable, review, settle } from "./review.ts";
 import {
-  diffHash,
   FINDING_TAG,
   fingerprint,
   lastMarker,
@@ -317,16 +316,7 @@ async function main() {
     });
 
     const open = findings.filter((f) => f.status === "open");
-    const done = new Set(reviewed);
-    const inScope = new Set(scope.map((d) => d.path));
-    const files: Record<string, string> = {};
-    for (const d of diffs) {
-      // Read this run, or with nothing new to read (focus left it out): its current hash. A file
-      // this run should have read but did not (a failed part) loses its record, so the next
-      // run reads it whole instead of looking only at lines changed after this one.
-      const hash = inScope.has(d.path) && !done.has(d.path) ? undefined : diffHash(d.numbered);
-      if (hash) files[d.path] = hash;
-    }
+    const files = nextFiles(diffs, scope, reviewed);
     const state: State = { head: pr.head.sha, score: score(open), findings, files };
 
     // A run stopped mid-post (deploy, kill) may have posted some of these on this head

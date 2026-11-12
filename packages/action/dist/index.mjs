@@ -17088,6 +17088,11 @@ function focus(diffs, seen, since) {
   });
   return { scope: scope2, fresh, changed };
 }
+function nextFiles(diffs, scope2, reviewed) {
+  const done = new Set(reviewed);
+  const inScope = new Set(scope2.map((d) => d.path));
+  return Object.fromEntries(diffs.filter((d) => !inScope.has(d.path) || done.has(d.path)).map((d) => [d.path, diffHash(d.numbered)]));
+}
 function reportable(f, limits) {
   if (!inFile(f.file, limits)) return false;
   const lo = Math.min(f.line, f.endLine);
@@ -17491,13 +17496,7 @@ ${text}` : "";
       return { findings: findings2, fresh: fresh2, notes: notes2, overCap: overCap2 };
     });
     const open = findings.filter((f) => f.status === "open");
-    const done = new Set(reviewed);
-    const inScope = new Set(scope2.map((d) => d.path));
-    const files = {};
-    for (const d of diffs) {
-      const hash = inScope.has(d.path) && !done.has(d.path) ? void 0 : diffHash(d.numbered);
-      if (hash) files[d.path] = hash;
-    }
+    const files = nextFiles(diffs, scope2, reviewed);
     const state = { head: pr.head.sha, score: score(open), findings, files };
     const comments = !dryRun && fresh.length ? await gh.reviewComments(number2).catch((e) => {
       log.warn(`Could not read review comments, so already posted findings may post again: ${String(e)}`);
