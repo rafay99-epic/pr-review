@@ -73,15 +73,26 @@ export function createApp(appId: string, privateKey: string) {
      * woke a stopped machine before the server was listening. Returns how many it asked for.
      */
     async redeliverFailed(since: number): Promise<number> {
-      const res = await request("GET", "/app/hook/deliveries?per_page=100");
-      if (!res.ok) throw new Error(`GitHub GET deliveries: ${res.status}`);
-      // Ids are read from the JSON source text: as numbers they would round to another delivery.
-      const raw: unknown = JSON.parse(await res.text(), (k, v: unknown, ctx?: { source?: string }) => (k === "id" && typeof v === "number" ? (ctx?.source ?? String(v)) : v));
-      const failed = failedDeliveries(Delivery.array().assert(raw), since);
-      for (const d of failed) {
-        const res = await request("POST", `/app/hook/deliveries/${d.id}/attempts`);
-        if (!res.ok) throw new Error(`GitHub redeliver ${d.id}: ${res.status}`);
+      // Newest first, a page at a time, back to `since` (capped: a busier window than this has
+      // bigger problems than a lost delivery).
+      const list: Delivery[] = [];
+      let path: string | undefined = "/app/hook/deliveries?per_page=100";
+      for (let page = 0; path && page < 10; page++) {
+        const res = await request("GET", path);
+        if (!res.ok) throw new Error(`GitHub GET deliveries: ${res.status}`);
+        // Ids are read from the JSON source text: as numbers they would round to another delivery.
+        const raw: unknown = JSON.parse(await res.text(), (k, v: unknown, ctx?: { source?: string }) => (k === "id" && typeof v === "number" ? (ctx?.source ?? String(v)) : v));
+        const batch = Delivery.array().assert(raw);
+        list.push(...batch);
+        const oldest = batch.at(-1);
+        const next = /<https:\/\/api\.github\.com([^>]+)>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1];
+        path = oldest && Date.parse(oldest.delivered_at) >= since ? next : undefined;
       }
+      // One refused resend does not stop the others; each is tried again next round.
+      const failed = failedDeliveries(list, since);
+      const results = await Promise.all(failed.map((d) => request("POST", `/app/hook/deliveries/${d.id}/attempts`).then((r) => r.ok, () => false)));
+      const refused = results.filter((ok) => !ok).length;
+      if (refused) throw new Error(`GitHub refused ${refused} of ${failed.length} redeliveries`);
       return failed.length;
     },
   };

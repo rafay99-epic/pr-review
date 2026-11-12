@@ -9,7 +9,7 @@ import { createPrivateKey, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, statfs, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { type } from "arktype";
@@ -109,6 +109,8 @@ async function makeRoom() {
   const clones = await Promise.all(idle.map(async (name) => ({ dir: join(root, name), used: await stat(join(root, name)).then((st) => st.mtimeMs, () => 0) })));
   for (const clone of clones.sort((a, b) => a.used - b.used)) {
     if ((await free()) >= MIN_FREE_BYTES) return;
+    // A review may have taken this clone since the list was made.
+    if (busy.has(basename(clone.dir).replace(/\.partial$/, ""))) continue;
     await rm(clone.dir, { recursive: true, force: true });
   }
   if ((await free()) < MIN_FREE_BYTES) throw new Error("the data volume is full");
