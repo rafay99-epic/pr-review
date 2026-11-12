@@ -60,7 +60,7 @@ Check, in order:
 3. **Opened by a bot?** The hosted bot and the server skip Dependabot and other bot PRs. In the Action they get no secrets, so the run fails early.
 4. **Hosted bot or server:** is the App installed on this repository? Is there a **ReviewPilot** check saying **Add your model key**? Its text says what is missing.
 5. **Action:** is the workflow on the PR's branch, and did the run start under the Actions tab?
-6. **Just pushed?** The server waits a minute after the last push before it starts.
+6. **Just pushed?** The server waits a minute after the last push before it starts. If GitHub could not reach it, the server asks for the webhook again within a few minutes.
 
 ### `/review` does nothing
 

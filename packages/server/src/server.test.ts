@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { createQueue, type Job } from "./queue.ts";
 import { constants, generateKeyPairSync, publicEncrypt } from "node:crypto";
 import { chooseKey, ownerOf, seal, sealedKeyOf, unseal } from "./model-key.ts";
+import { failedDeliveries } from "./github-app.ts";
 import { allowedRepo, toJob, verify } from "./webhook.ts";
 
 const repository = { full_name: "me/app", owner: { login: "me" } };
@@ -86,6 +87,25 @@ test("chooseKey: a sealed key wins, a refused one never falls back, REPOS gates 
   assert.deepEqual(chooseKey({ ...base, sealed: undefined }), { key: "sk-server" });
   assert.ok("missing" in chooseKey({ ...base, sealed: undefined, repo: "stranger/app", owner: { login: "stranger", id: 9 } }));
   assert.ok("missing" in chooseKey({ ...base, sealed: undefined, apiKey: undefined }));
+});
+
+test("failedDeliveries picks recent deliveries that only ever timed out or got a 5xx", () => {
+  const at = (min: number) => new Date(Date.UTC(2026, 0, 1, 0, min)).toISOString();
+  const d = (id: string, guid: string, status_code: number, min: number, event = "pull_request") => ({ id, guid, status_code, event, delivered_at: at(min) });
+  const since = Date.parse(at(10));
+  const picked = failedDeliveries(
+    [
+      d("3853587865764110336", "a", 500, 12), // timed out once: redeliver
+      d("2", "b", 502, 12), d("3", "b", 202, 13), // failed, then a redelivery worked: skip
+      d("3853587865764110400", "c", 502, 12), d("3853587865764110401", "c", 0, 14), // failed twice: newest attempt, ids beyond 2^53
+      d("6", "e", 502, 5), // too old
+      d("7", "f", 502, 12, "installation"), // not an event we act on
+      d("8", "g", 202, 12, "issue_comment"), // delivered
+      d("9", "h", 401, 12), // refused on purpose (bad signature): never resent
+    ],
+    since,
+  );
+  assert.deepEqual(picked.map((p) => p.id).sort(), ["3853587865764110336", "3853587865764110401"]);
 });
 
 test("ownerOf reads the repo owner's login and id from a webhook payload", () => {

@@ -151,4 +151,5 @@ Severity, rules and the model still come from `.reviewpilot.yml` in each reposit
 - **Cost:** the machine bills by the second only while it runs and stops after ten idle minutes. Fly starts it again when the next webhook arrives, within a few seconds.
 - **Deploys:** a review that has started posting finishes first. Any other review stops and runs again after the restart, from jobs saved on the volume.
 - **Capacity:** up to three reviews at once, one per repository at a time. A bigger machine in `fly.toml` does not change that; it is a constant in `packages/server/src/main.ts`.
+- **Missed webhooks:** GitHub gives a delivery 10 seconds and never retries it. Shortly after starting and every two minutes while running, the server asks GitHub to resend deliveries from the last 30 minutes that timed out or failed, so a network blip, a deploy or a cold start does not lose a review.
 - **Disk:** clones unused for 14 days are deleted when the server starts. Before a new clone it keeps 1.5 GB free, deleting the least recently used clones that no review is using; a repo whose clone was deleted is cloned again on its next review.

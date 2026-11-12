@@ -52,6 +52,8 @@ const CLONE_TIMEOUT_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 2;
 /** A clone unused this long is deleted at startup, so repos that left do not fill the volume. */
 const CLONE_TTL_MS = 14 * 24 * 60 * 60_000;
+/** How far back a fresh start looks for webhooks GitHub could not deliver. */
+const REDELIVER_WINDOW_MS = 30 * 60_000;
 /** Free space a new clone needs on the volume; older clones make way (see makeRoom). */
 const MIN_FREE_BYTES = 1.5 * 1024 ** 3;
 
@@ -302,6 +304,17 @@ async function start() {
     queue.schedule({ ...saved, debounce: false });
   }
   server.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log(`listening; server key for: ${API_KEY ? [...REPOS].join(", ") || "every repo" : "none"}; sealed keys: ${SEAL_KEY ? "accepted" : "off"}`));
+
+  // GitHub gives a delivery 10 seconds and never retries it, so a network blip, a deploy or a
+  // cold start can drop a review. Shortly after starting, and every few minutes while up, ask
+  // GitHub to send again whatever failed recently.
+  const redeliver = () =>
+    void app
+      .redeliverFailed(Date.now() - REDELIVER_WINDOW_MS)
+      .then((n) => n && console.log(`asked GitHub to redeliver ${n} failed webhook(s)`))
+      .catch((e: unknown) => console.log(`could not check failed webhooks: ${e instanceof Error ? e.message : String(e)}`));
+  setTimeout(redeliver, 15_000);
+  setInterval(redeliver, 2 * 60_000).unref();
 
   // Exit 0 when idle; the machine stops and the next delivery starts it again.
   setInterval(() => {

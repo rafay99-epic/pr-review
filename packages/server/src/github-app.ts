@@ -6,6 +6,27 @@ import { type } from "arktype";
 
 const Token = type({ token: "string" });
 const App = type({ slug: "string" });
+/** `id` stays a string: delivery ids are past Number.MAX_SAFE_INTEGER (see redeliverFailed). */
+const Delivery = type({ id: "string", guid: "string", delivered_at: "string", status_code: "number", event: "string" });
+export type Delivery = typeof Delivery.infer;
+
+/** Events the server acts on; failed deliveries of others are not worth redelivering. */
+const EVENTS = new Set(["pull_request", "issue_comment"]);
+
+/**
+ * Deliveries to ask GitHub for again: the newest attempt of each delivery (by guid) of an event
+ * we act on, sent since `since`, whose every attempt timed out (status 0) or got a 5xx. One the
+ * server answered with a 2xx or 4xx was handled or refused on purpose. GitHub never retries.
+ */
+export function failedDeliveries(list: readonly Delivery[], since: number): Delivery[] {
+  const attempts = new Map<string, Delivery[]>();
+  for (const d of list) {
+    if (EVENTS.has(d.event) && Date.parse(d.delivered_at) >= since) attempts.set(d.guid, [...(attempts.get(d.guid) ?? []), d]);
+  }
+  return [...attempts.values()]
+    .filter((tries) => tries.every((t) => t.status_code === 0 || t.status_code >= 500))
+    .map((tries) => tries.reduce((a, b) => (BigInt(a.id) > BigInt(b.id) ? a : b)));
+}
 
 const b64url = (text: string) => Buffer.from(text).toString("base64url");
 
@@ -17,8 +38,8 @@ export function createApp(appId: string, privateKey: string) {
     return `${unsigned}.${createSign("RSA-SHA256").update(unsigned).sign(privateKey, "base64url")}`;
   }
 
-  async function call<S extends type.Any>(schema: S, method: string, path: string): Promise<S["infer"]> {
-    const res = await fetch(`https://api.github.com${path}`, {
+  const request = (method: string, path: string) =>
+    fetch(`https://api.github.com${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${jwt()}`,
@@ -28,6 +49,9 @@ export function createApp(appId: string, privateKey: string) {
       },
       signal: AbortSignal.timeout(30_000),
     });
+
+  async function call<S extends type.Any>(schema: S, method: string, path: string): Promise<S["infer"]> {
+    const res = await request(method, path);
     if (!res.ok) throw new Error(`GitHub ${method} ${path}: ${res.status} ${(await res.text()).slice(0, 300)}`);
     return schema.assert(await res.json());
   }
@@ -42,6 +66,23 @@ export function createApp(appId: string, privateKey: string) {
     async login(): Promise<string> {
       login ??= `${(await call(App, "GET", "/app")).slug}[bot]`;
       return login;
+    },
+
+    /**
+     * Asks GitHub to send again the deliveries that failed since `since`, such as the one that
+     * woke a stopped machine before the server was listening. Returns how many it asked for.
+     */
+    async redeliverFailed(since: number): Promise<number> {
+      const res = await request("GET", "/app/hook/deliveries?per_page=100");
+      if (!res.ok) throw new Error(`GitHub GET deliveries: ${res.status}`);
+      // Ids are read from the JSON source text: as numbers they would round to another delivery.
+      const raw: unknown = JSON.parse(await res.text(), (k, v: unknown, ctx?: { source?: string }) => (k === "id" && typeof v === "number" ? (ctx?.source ?? String(v)) : v));
+      const failed = failedDeliveries(Delivery.array().assert(raw), since);
+      for (const d of failed) {
+        const res = await request("POST", `/app/hook/deliveries/${d.id}/attempts`);
+        if (!res.ok) throw new Error(`GitHub redeliver ${d.id}: ${res.status}`);
+      }
+      return failed.length;
     },
   };
 }
