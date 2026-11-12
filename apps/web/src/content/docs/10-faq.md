@@ -72,7 +72,7 @@ The repository has the App but no key it can use. The check's text gives the rea
 
 ### The review was cut off or partial
 
-The summary names any part of the diff that could not be reviewed, and the check fails: a review that did not read everything cannot pass, whatever its score. When an agent runs out of time it submits what it found so far, so this is rare. Comment `/review` to try again. A PR too large to read whole (files skipped by size) gets a neutral check instead.
+The summary names any part of the diff that could not be reviewed, and the check fails: a review that did not read everything cannot pass, whatever its score. When an agent runs out of time it submits what it found so far, so this is rare. With the Action it usually means the job timeout: raise `timeout-minutes` or use a server. Comment `/review` to try again. A PR too large to read whole (files skipped by size) gets a neutral check instead.
 
 ### How do I stop ReviewPilot on a repository?
 
