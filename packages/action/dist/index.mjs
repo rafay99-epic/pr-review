@@ -17110,15 +17110,16 @@ function reportable(f, limits) {
   const lo = Math.min(f.line, f.endLine);
   const hi = Math.max(f.line, f.endLine);
   const hits = (lines) => [...lines].some((n) => n >= lo && n <= hi);
+  const d = limits.diffs.find((x) => x.path === f.file);
+  if (!d || !hits(d.commentable)) return limits.outside === "summary";
   const fresh = limits.fresh.get(f.file);
   if (fresh) return hits(fresh);
-  const d = limits.diffs.find((x) => x.path === f.file);
-  return limits.outside === "summary" || d !== void 0 && hits(d.commentable);
+  return !limits.incremental || limits.scope.some((x) => x.path === f.file);
 }
 function inFile(file, limits) {
-  if (limits.fresh.has(file)) return true;
+  if (limits.outside === "summary" || limits.fresh.has(file)) return true;
   if (limits.incremental && !limits.scope.some((d) => d.path === file)) return false;
-  return limits.outside === "summary" || limits.diffs.some((d) => d.path === file);
+  return limits.diffs.some((d) => d.path === file);
 }
 function ranges(lines) {
   const sorted = [...lines].sort((a, b) => a - b);

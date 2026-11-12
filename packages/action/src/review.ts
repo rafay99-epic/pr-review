@@ -239,10 +239,14 @@ export function reportable(f: Pick<Finding, "file" | "line" | "endLine">, limits
   const hi = Math.max(f.line, f.endLine);
   // By the set, not the range: a model-written end line can be huge.
   const hits = (lines: ReadonlySet<number>) => [...lines].some((n) => n >= lo && n <= hi);
+  const d = limits.diffs.find((x) => x.path === f.file);
+  // Off the PR's diff: only as an unscored note, and only when the repo asks for those.
+  if (!d || !hits(d.commentable)) return limits.outside === "summary";
+  // On the diff: on a push, only lines changed since the last review count; the rest of the
+  // diff was reviewed before, so findings there are dropped in either mode.
   const fresh = limits.fresh.get(f.file);
   if (fresh) return hits(fresh);
-  const d = limits.diffs.find((x) => x.path === f.file);
-  return limits.outside === "summary" || (d !== undefined && hits(d.commentable));
+  return !limits.incremental || limits.scope.some((x) => x.path === f.file);
 }
 
 /**
@@ -250,9 +254,10 @@ export function reportable(f: Pick<Finding, "file" | "line" | "endLine">, limits
  * before verification, where a line a few off may still be moved onto a changed line.
  */
 export function inFile(file: string, limits: Limits): boolean {
-  if (limits.fresh.has(file)) return true;
+  // With outside_diff: summary any file may hold a note; reportable decides by line.
+  if (limits.outside === "summary" || limits.fresh.has(file)) return true;
   if (limits.incremental && !limits.scope.some((d) => d.path === file)) return false;
-  return limits.outside === "summary" || limits.diffs.some((d) => d.path === file);
+  return limits.diffs.some((d) => d.path === file);
 }
 
 /** "12-15, 40" for a set of line numbers. */

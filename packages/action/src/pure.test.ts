@@ -204,6 +204,15 @@ test("new findings stay inside the PR, and inside the new lines on a push", () =
   assert.equal(inFile("old.ts", limits), false); // in the PR, but nothing new this push
   assert.equal(inFile("other.ts", limits), false); // not in the PR
   assert.equal(inFile("other.ts", { ...limits, incremental: false, outside: "summary" }), true);
+  // outside_diff: summary on a push: off-diff findings anywhere become notes, but old diff lines stay closed.
+  const notes: Limits = { ...limits, outside: "summary" };
+  const may = (file: string, line: number) => reportable({ file, line, endLine: line }, notes);
+  assert.equal(may("b.ts", 11), true); // new line: tracked
+  assert.equal(may("b.ts", 10), false); // reviewed before: dropped
+  assert.equal(may("b.ts", 50), true); // off the diff: a note
+  assert.equal(may("old.ts", 5), false); // on the diff, nothing new this push
+  assert.equal(may("old.ts", 99), true); // off the diff: a note
+  assert.equal(may("other.ts", 1), true); // not in the PR: a note
   // anchor finds the last changed line in a huge range without walking it.
   assert.deepEqual(anchor({ ...file("a.ts", [3, 5]), hunkOf: new Map([[3, 0], [5, 0]]) }, 4, 1_000_000_000), { line: 5 });
   const summary: Limits = { ...limits, incremental: false, fresh: new Map(), outside: "summary" };
