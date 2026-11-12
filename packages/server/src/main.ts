@@ -209,6 +209,12 @@ function run(job: Job): Run {
       if (!spawned && !stopped && attempt <= MAX_ATTEMPTS) {
         say(key, `retrying (${attempt} of ${MAX_ATTEMPTS})`);
         void enqueue({ ...job, attempt, debounce: true }).catch(() => undefined);
+      } else if (!spawned && !stopped) {
+        // Out of retries before the review started: say so on the PR rather than stay silent.
+        void (async () => {
+          const api = repoApi(await app.token(job.installation), job.repo);
+          await api.blocked(await api.headSha(job.number), "ReviewPilot could not start", "Starting the review kept failing (GitHub may have been unavailable). Comment `/review` to try again.", KEY_DOCS);
+        })().catch((err: unknown) => say(key, `could not report the failure: ${String(err)}`));
       }
     })
     // The file stays when a newer delivery for this PR rewrote it, or when a shutdown cut

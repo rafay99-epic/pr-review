@@ -83,6 +83,8 @@ test("chooseKey: a sealed key wins, a refused one never falls back, REPOS gates 
   const base = { sealKey: privateKey, apiKey: "sk-server", repos: new Set(["me/*"]), repo: "me/app", owner: me };
   assert.deepEqual(chooseKey({ ...base, sealed }), { key: "sk-own" });
   assert.ok("missing" in chooseKey({ ...base, sealed, sealKey: undefined }));
+  // A broken sealed_key never falls back to the server's key, even in a REPOS repo.
+  assert.match(String(Object.values(chooseKey({ ...base, sealed: null }))[0]), /not a sealed key/);
   assert.ok("missing" in chooseKey({ ...base, sealed: seal(keys().publicKey, { v: 1, owner: "me", owner_id: 42, key: "x" }) }));
   assert.deepEqual(chooseKey({ ...base, sealed: undefined }), { key: "sk-server" });
   assert.ok("missing" in chooseKey({ ...base, sealed: undefined, repo: "stranger/app", owner: { login: "stranger", id: 9 } }));
@@ -117,7 +119,10 @@ test("ownerOf reads the repo owner's login and id from a webhook payload", () =>
 test("sealedKeyOf reads sealed_key from the config, ignoring line breaks", () => {
   assert.equal(sealedKeyOf("sealed_key: |\n  abc\n  def\nreview:\n  scope: all\n"), "abcdef");
   assert.equal(sealedKeyOf("review:\n  scope: all\n"), undefined);
-  assert.equal(sealedKeyOf("sealed_key: [1]"), undefined);
+  // Present but unreadable is null, so it is reported rather than treated as missing.
+  assert.equal(sealedKeyOf("sealed_key: [1]"), null);
+  assert.equal(sealedKeyOf("sealed_key:\n"), null);
+  assert.equal(sealedKeyOf("sealed_key: |\n  abc\n bad: [indent"), null);
   assert.equal(sealedKeyOf(": not yaml : :"), undefined);
   assert.equal(sealedKeyOf(undefined), undefined);
 });

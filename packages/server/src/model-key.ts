@@ -47,16 +47,22 @@ export function seal(publicKey: KeyObject | string, payload: Sealed): string {
 /** The public half, to publish for sealing. */
 export const publicPem = (privateKey: KeyObject) => createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
 
-/** `sealed_key` from the config text, if any. Validation of the rest is the action's job. */
-export function sealedKeyOf(configText: string | undefined): string | undefined {
+/**
+ * `sealed_key` from the config text: the blob, `undefined` when there is none, or `null` when
+ * one is there but unreadable (not text, or the file is not valid YAML), so a broken key is
+ * reported instead of treated as absent. Validation of the rest is the action's job.
+ */
+export function sealedKeyOf(configText: string | undefined): string | null | undefined {
   if (!configText) return undefined;
+  let raw: unknown;
   try {
-    const raw: unknown = parse(configText);
-    const value = raw && typeof raw === "object" && "sealed_key" in raw ? raw.sealed_key : undefined;
-    return typeof value === "string" ? value.replace(/\s+/g, "") : undefined;
+    raw = parse(configText);
   } catch {
-    return undefined;
+    return /^\s*sealed_key\s*:/m.test(configText) ? null : undefined;
   }
+  if (!raw || typeof raw !== "object" || !("sealed_key" in raw)) return undefined;
+  const value = raw.sealed_key;
+  return typeof value === "string" && value.trim() ? value.replace(/\s+/g, "") : null;
 }
 
 /** A provider URL the key may go to: https, a host, and no user info that could hide the real host. */
@@ -101,13 +107,14 @@ export function unseal(privateKey: KeyObject, blob: string, owner: Owner): Model
  * covers the repo. A sealed key the server cannot accept never falls back to the server's key.
  */
 export function chooseKey(o: {
-  sealed: string | undefined;
+  sealed: string | null | undefined;
   sealKey: KeyObject | undefined;
   apiKey: string | undefined;
   repos: ReadonlySet<string>;
   repo: string;
   owner: Owner;
 }): ModelKey {
+  if (o.sealed === null) return { missing: "sealed_key in .reviewpilot.yml is not a sealed key; paste the whole block the seal form gives you" };
   if (o.sealed) return o.sealKey ? unseal(o.sealKey, o.sealed, o.owner) : { missing: "this server does not accept sealed keys" };
   if (o.apiKey && allowedRepo(o.repos, o.repo)) return { key: o.apiKey };
   return { missing: "this repository has no model key yet" };
