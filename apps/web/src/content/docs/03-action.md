@@ -1,19 +1,29 @@
 ---
-title: Getting started
-summary: One workflow file and one secret. Two minutes.
+title: GitHub Action
+summary: One secret and one workflow file. Runs on your own Actions runners.
 ---
 
-## 1. Add your model key
+The Action runs the reviewer inside a GitHub Actions job in your repository. Nothing else to install or host. The trade-off is the job timeout: a very large first review can run out of time, and pushes during a review wait their turn. If that happens, use the [hosted bot](#hosted) or [your own server](#server).
 
-ReviewPilot calls an OpenAI-compatible chat API with your own key. The default is [Command Code](https://commandcode.ai) running GLM-5.3 Flash.
+<ol class="steps">
+<li>
+
+### Add your model key as a secret
+
+<p class="who">You · terminal or repo Settings → Secrets and variables → Actions</p>
+
+ReviewPilot calls an OpenAI-compatible API with your key. The default is [Command Code](https://commandcode.ai) running GLM-5.3 Flash.
 
 ```sh
 gh secret set REVIEWPILOT_API_KEY -R owner/repo
 ```
 
-## 2. Add the workflow
+</li>
+<li>
 
-Create `.github/workflows/reviewpilot.yml`:
+### Add the workflow
+
+<p class="who">You · `.github/workflows/reviewpilot.yml`</p>
 
 ```yaml
 name: reviewpilot
@@ -49,12 +59,40 @@ jobs:
       - uses: rafay99-epic/reviewpilot@main
         with:
           api_key: ${{ secrets.REVIEWPILOT_API_KEY }}
+          # base_url: https://openrouter.ai/api/v1   # any OpenAI-compatible provider
 ```
 
-## 3. Open a pull request
+Using another provider? Set `base_url` here and a model it offers as `model.name` in [`.reviewpilot.yml`](#configuration).
 
-ReviewPilot reviews it on open and on every push. Comment `/review` to run it again.
+</li>
+<li>
 
-GitHub runs comment-triggered workflows only from the default branch, so `/review` starts working once this workflow is merged.
+### Merge the workflow to your default branch
 
-Busy repo with long reviews or many pushes? [Run it as a server](#server) instead.
+<p class="who">You · GitHub</p>
+
+Pull requests are reviewed as soon as the file is on their branch. `/review` comments only work once the workflow is on the default branch, because GitHub runs comment-triggered workflows from there.
+
+</li>
+<li>
+
+### Open a pull request
+
+<p class="who">ReviewPilot · automatic</p>
+
+It reviews on open and on every push, and posts the summary, inline comments and the **ReviewPilot** check. Comment `/review` to review the whole PR again.
+
+</li>
+</ol>
+
+## Optional: post as your own bot
+
+By default comments come from `github-actions[bot]`. To post as your own name and logo, create a GitHub App and mint its token in the workflow: [Your own bot](#own-bot).
+
+## When the Action is not enough
+
+| Symptom | Why | Fix |
+| --- | --- | --- |
+| Review stops at 20 minutes with nothing posted | The first review of a big PR needs longer than the job timeout | Raise `timeout-minutes`, or move to the [server](#server) (50 minutes) |
+| Pushes pile up behind a running review | Workflow runs of one PR queue | The server stops the stale review and starts on the new commit |
+| Every run spends a minute cloning | Each job starts from a fresh checkout | The server keeps a clone and only fetches new commits |

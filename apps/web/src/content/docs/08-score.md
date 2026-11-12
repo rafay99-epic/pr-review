@@ -13,6 +13,40 @@ summary: Computed from verified findings, never asked of the model.
 
 Because it is derived from findings, the score only moves when findings change. The ReviewPilot check passes at 5/5 and fails below it, so "green check" means "no verified issues".
 
+## Getting to 5/5
+
+<ol class="steps">
+<li>
+
+### Read the findings
+
+<p class="who">You or your coding agent</p>
+
+Each inline comment names the problem, why it matters and the lines that prove it. The summary lists every open one.
+
+</li>
+<li>
+
+### Fix and push, or answer
+
+<p class="who">You</p>
+
+Push a fix, or reply to the comment (or resolve its thread) if it is not worth fixing. A reply from the PR author or a maintainer dismisses the finding for good.
+
+</li>
+<li>
+
+### ReviewPilot checks again
+
+<p class="who">ReviewPilot · on the push</p>
+
+It rereads the changed files, checks every open finding against the new code, and updates the score. At 5/5 the check turns green.
+
+</li>
+</ol>
+
+To block merges below 5/5, add a branch ruleset that requires the **ReviewPilot** status check.
+
 ## Across pushes
 
 On every push, open findings are checked again against the new code:

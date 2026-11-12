@@ -51,7 +51,7 @@ export function Hero() {
             An open-source PR reviewer. One agent reads the code around your diff, a second tries to prove each finding wrong. Only what survives gets posted.
           </p>
           <div style={{ "--delay": "220ms" }} className="hero-in mt-8 flex flex-wrap items-center gap-3">
-            <a href="/docs/#getting-started" className="rounded-lg bg-paper px-5 py-3 font-medium text-ink transition-transform hover:-translate-y-0.5">
+            <a href="/docs/#start" className="rounded-lg bg-paper px-5 py-3 font-medium text-ink transition-transform hover:-translate-y-0.5">
               Add to a repo
             </a>
             <a href="#how" className="rounded-lg border border-[#333] px-5 py-3 text-paper transition-colors hover:border-paper">
@@ -64,7 +64,7 @@ export function Hero() {
       <div className="border-y border-line">
         <ul className="mx-auto flex max-w-6xl flex-wrap gap-x-10 gap-y-2 px-4 py-5 font-mono text-[13px] text-mute sm:px-6">
           <li>No dashboard</li>
-          <li>Actions or self-hosted</li>
+          <li>Hosted, Actions or self-hosted</li>
           <li>Your model, your key</li>
           <li>State lives in the PR</li>
           <li>MIT</li>
