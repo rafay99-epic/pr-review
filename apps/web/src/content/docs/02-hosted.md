@@ -93,12 +93,13 @@ When a repository has the App but no usable key, the PR gets a **ReviewPilot** c
 | the sealed key belongs to *another-account* | You sealed it for a different account, or the repository moved to another owner. Seal it again for the account that owns it now |
 | the sealed key could not be opened | It was sealed for a different server, or got cut while pasting. Seal it again and paste the whole block |
 | the sealed key is not in the expected format | It was sealed by hand with a mistake in the JSON. Use the form above, or copy the `printf` line exactly |
+| the webhook did not say who owns this repository | A GitHub delivery came without the owner. Comment `/review` to try again; if it repeats, open an issue |
 | this server does not accept sealed keys | The server you installed is not set up for sealed keys (a self-hosted one without `SEAL_KEY`). Ask its owner |
 | the sealed key's base_url must be an https URL | Seal it again with an `https://` provider URL |
 
 ## What the hosted server sees
 
-- **Your code.** It is cloned onto the hosted server so agents can read it, and sent to your model provider in pieces. Clones not used for 14 days are deleted. Nothing is shared with anyone else.
+- **Your code.** It is cloned onto the hosted server so agents can read it, and sent to your model provider in pieces. Clones not used for 14 days are deleted, and the least recently used ones make way when the disk runs low. Nothing is shared with anyone else.
 - **Your key.** Opened in memory for each review and handed only to the reviewer process. It is never logged and never written to disk unsealed.
 - **Not your other secrets.** The App cannot read repository secrets, Actions logs or anything outside the repositories you installed it on.
 

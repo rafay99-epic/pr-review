@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import { createQueue, type Job } from "./queue.ts";
 import { constants, generateKeyPairSync, publicEncrypt } from "node:crypto";
-import { chooseKey, seal, sealedKeyOf, unseal } from "./model-key.ts";
+import { chooseKey, ownerOf, seal, sealedKeyOf, unseal } from "./model-key.ts";
 import { allowedRepo, toJob, verify } from "./webhook.ts";
 
 const repository = { full_name: "me/app", owner: { login: "me" } };
@@ -63,6 +63,8 @@ test("a sealed key opens only on its server, for its account id, toward a plain 
   assert.equal("key" in unseal(privateKey, sealFor(), { login: "me-renamed", id: 42 }), true);
   assert.match(String(Object.values(unseal(privateKey, sealFor(), { login: "me", id: 7 }))[0]), /a different account that was named me/);
   assert.match(String(Object.values(unseal(privateKey, sealFor(), { login: "you", id: 7 }))[0]), /belongs to me, not you/);
+  // The claimed login is sealer-written: it cannot smuggle line breaks into logs or checks.
+  assert.match(String(Object.values(unseal(privateKey, sealFor({ owner: "x\n[me/app#1] cloned" }), { login: "you", id: 7 }))[0]), /belongs to xmeapp1cloned, not you/);
   assert.deepEqual(unseal(privateKey, seal(publicKey, { v: 1, owner: "me", owner_id: 42, key: "sk-1" }), me), { key: "sk-1" });
   assert.ok("missing" in unseal(keys().privateKey, sealFor(), me));
   assert.ok("missing" in unseal(privateKey, "not base64 at all", me));
@@ -84,6 +86,12 @@ test("chooseKey: a sealed key wins, a refused one never falls back, REPOS gates 
   assert.deepEqual(chooseKey({ ...base, sealed: undefined }), { key: "sk-server" });
   assert.ok("missing" in chooseKey({ ...base, sealed: undefined, repo: "stranger/app", owner: { login: "stranger", id: 9 } }));
   assert.ok("missing" in chooseKey({ ...base, sealed: undefined, apiKey: undefined }));
+});
+
+test("ownerOf reads the repo owner's login and id from a webhook payload", () => {
+  assert.deepEqual(ownerOf({ repository: { full_name: "me/app", owner: { login: "me", id: 42, type: "User" } } }), { login: "me", id: 42 });
+  assert.equal(ownerOf({ repository: { full_name: "me/app", owner: { login: "me" } } }), undefined);
+  assert.equal(ownerOf({}), undefined);
 });
 
 test("sealedKeyOf reads sealed_key from the config, ignoring line breaks", () => {

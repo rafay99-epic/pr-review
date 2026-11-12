@@ -25,8 +25,19 @@ export type ModelKey = { key: string; baseUrl?: string } | { missing: string };
 
 const OAEP = { padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" } as const;
 
-/** The account that owns a repo, from the webhook payload. */
-export type Owner = { login: string; id: number };
+const RepoOwner = type({ repository: { owner: { login: "string", id: "number.integer" } } });
+
+/** The account that owns a repo. */
+export type Owner = typeof RepoOwner.infer.repository.owner;
+
+/** The repo's owner from a webhook payload (saved jobs carry the same payload). */
+export function ownerOf(payload: unknown): Owner | undefined {
+  const out = RepoOwner(payload);
+  return out instanceof type.errors ? undefined : { login: out.repository.owner.login, id: out.repository.owner.id };
+}
+
+/** The login a sealed key claims, cut to what a GitHub login can hold: it is sealer-written text that ends up in logs and checks. */
+const claimed = (login: string) => login.replace(/[^A-Za-z0-9-]/g, "").slice(0, 39) || "another account";
 
 /** Seals a key for `owner`. The website and `openssl pkeyutl` produce the same format. */
 export function seal(publicKey: KeyObject | string, payload: Sealed): string {
@@ -75,7 +86,8 @@ export function unseal(privateKey: KeyObject, blob: string, owner: Owner): Model
   const payload = Sealed(raw);
   if (payload instanceof type.errors) return { missing: "the sealed key is not in the expected format; seal it again" };
   if (payload.owner_id !== owner.id) {
-    const who = payload.owner.toLowerCase() === owner.login.toLowerCase() ? `a different account that was named ${payload.owner}` : payload.owner;
+    const name = claimed(payload.owner);
+    const who = name.toLowerCase() === owner.login.toLowerCase() ? `a different account that was named ${name}` : name;
     return { missing: `the sealed key belongs to ${who}, not ${owner.login}; seal your own key for ${owner.login}` };
   }
   if (payload.base_url !== undefined && !safeBaseUrl(payload.base_url)) {

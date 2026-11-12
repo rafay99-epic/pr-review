@@ -7,14 +7,14 @@
 import { execFile, spawn } from "node:child_process";
 import { createPrivateKey, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, statfs, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { type } from "arktype";
 import { createApp, repoApi } from "./github-app.ts";
-import { chooseKey, type ModelKey, publicPem, sealedKeyOf } from "./model-key.ts";
+import { chooseKey, type ModelKey, ownerOf, publicPem, sealedKeyOf } from "./model-key.ts";
 import { createQueue, type Job, keyOf, type Run } from "./queue.ts";
 import { toJob, verify } from "./webhook.ts";
 
@@ -52,6 +52,8 @@ const CLONE_TIMEOUT_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 2;
 /** A clone unused this long is deleted at startup, so repos that left do not fill the volume. */
 const CLONE_TTL_MS = 14 * 24 * 60 * 60_000;
+/** Free space a new clone needs on the volume; older clones make way (see makeRoom). */
+const MIN_FREE_BYTES = 1.5 * 1024 ** 3;
 
 const SavedJob = type({
   repo: "string",
@@ -78,14 +80,36 @@ const gitEnv = (token: string) => ({
   GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
 });
 
-const RepoOwner = type({ repository: { owner: { login: "string", id: "number" } } });
-
 /** The key for a job's repo. `.reviewpilot.yml` is read from the default branch, so a PR cannot swap it. */
 async function modelKey(job: Job, token: string): Promise<ModelKey> {
-  const owner = RepoOwner(job.payload);
-  if (owner instanceof type.errors) return { missing: "the webhook did not say who owns this repository" };
+  const owner = ownerOf(job.payload);
+  if (!owner) return { missing: "the webhook did not say who owns this repository" };
   const sealed = sealedKeyOf(await repoApi(token, job.repo).file(".reviewpilot.yml"));
-  return chooseKey({ sealed, sealKey: SEAL_KEY, apiKey: API_KEY, repos: REPOS, repo: job.repo, owner: owner.repository.owner });
+  return chooseKey({ sealed, sealKey: SEAL_KEY, apiKey: API_KEY, repos: REPOS, repo: job.repo, owner });
+}
+
+/** Clone folders in use by a running review; the space check never deletes these. */
+const busy = new Set<string>();
+
+/**
+ * Keeps MIN_FREE_BYTES free on the volume before a clone, deleting the least recently used
+ * clones that no review is using. Anyone can seal a key for their own repos, so this, not the
+ * key check, is what stops many installs from filling the disk.
+ */
+async function makeRoom() {
+  const free = async () => {
+    const s = await statfs(DATA);
+    return s.bavail * s.bsize;
+  };
+  if ((await free()) >= MIN_FREE_BYTES) return;
+  const root = join(DATA, "repos");
+  const idle = (await readdir(root)).filter((name) => !busy.has(name.replace(/\.partial$/, "")));
+  const clones = await Promise.all(idle.map(async (name) => ({ dir: join(root, name), used: await stat(join(root, name)).then((st) => st.mtimeMs, () => 0) })));
+  for (const clone of clones.sort((a, b) => a.used - b.used)) {
+    if ((await free()) >= MIN_FREE_BYTES) return;
+    await rm(clone.dir, { recursive: true, force: true });
+  }
+  if ((await free()) < MIN_FREE_BYTES) throw new Error("the data volume is full");
 }
 
 /** Runs one review: the clone (made once, reused after), then the action with a fresh token. */
@@ -110,12 +134,17 @@ function run(job: Job): Run {
       if (stopped) return;
       // Nothing to review with: the PR says what to do instead of staying silent.
       const api = repoApi(await app.token(job.installation), job.repo);
-      await api.blocked(await api.headSha(job.number), "Add your model key", `ReviewPilot did not run: ${model.missing}.\n\nSee [Add your model key](${KEY_DOCS}).`, KEY_DOCS);
+      const sha = await api.headSha(job.number);
+      // Checked again after the lookups: a newer push may have stopped this run meanwhile.
+      if (stopped) return;
+      await api.blocked(sha, "Add your model key", `ReviewPilot did not run: ${model.missing}.\n\nSee [Add your model key](${KEY_DOCS}).`, KEY_DOCS);
       return;
     }
     const dir = join(DATA, "repos", slug(job.repo));
+    busy.add(slug(job.repo));
     if (!existsSync(join(dir, ".git"))) {
       say(key, "cloning");
+      await makeRoom();
       // Cloned beside the final path and renamed when complete: a stopped or timed-out clone
       // never leaves a half-made repo that later runs would reuse.
       const partial = `${dir}.partial`;
@@ -182,7 +211,11 @@ function run(job: Job): Run {
     })
     // The file stays when a newer delivery for this PR rewrote it, or when a shutdown cut
     // the run short, so the job runs again after the restart.
-    .finally(() => (shuttingDown || queue.pending(key) ? undefined : rm(jobFile(key), { force: true })));
+    .finally(() => {
+      // One review per repo at a time, so this run was the folder's only user.
+      busy.delete(slug(job.repo));
+      return shuttingDown || queue.pending(key) ? undefined : rm(jobFile(key), { force: true });
+    });
 
   return { done, stop: () => stop() };
 }
