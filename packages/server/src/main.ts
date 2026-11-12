@@ -213,9 +213,11 @@ function run(job: Job): Run {
         void enqueue({ ...job, attempt, debounce: true }).catch(() => undefined);
       } else if (!spawned && !stopped) {
         // Out of retries before the review started: say so on the PR rather than stay silent.
+        // The error names the step (reading the config, cloning, a GitHub call), never a token.
+        const reason = (e instanceof Error ? e.message : String(e)).split("\n")[0]?.slice(0, 200) ?? "";
         void (async () => {
           const api = repoApi(await app.token(job.installation), job.repo);
-          await api.blocked(await api.headSha(job.number), "ReviewPilot could not start", "Starting the review kept failing (GitHub may have been unavailable). Comment `/review` to try again.", KEY_DOCS);
+          await api.blocked(await api.headSha(job.number), "ReviewPilot could not start", `Starting the review kept failing, usually because GitHub was briefly unavailable. Last error: \`${reason}\`.\n\nComment \`/review\` to try again.`, KEY_DOCS);
         })().catch((err: unknown) => say(key, `could not report the failure: ${String(err)}`));
       }
     })

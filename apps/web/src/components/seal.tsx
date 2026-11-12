@@ -38,11 +38,11 @@ export function Seal() {
   const [key, setKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [out, setOut] = useState<{ ok: true; yaml: string } | { ok: false; error: string }>();
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"no" | "yes" | "failed">("no");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    setCopied(false);
+    setCopied("no");
     try {
       const sealed = await sealKey(owner.trim(), key.trim(), baseUrl.trim());
       setOut({ ok: true, yaml: `sealed_key: |\n${(sealed.match(/.{1,76}/g) ?? []).map((l) => `  ${l}`).join("\n")}\n` });
@@ -53,8 +53,13 @@ export function Seal() {
 
   async function copy() {
     if (!out?.ok) return;
-    await navigator.clipboard.writeText(out.yaml);
-    setCopied(true);
+    try {
+      await navigator.clipboard.writeText(out.yaml);
+      setCopied("yes");
+    } catch {
+      // Blocked clipboard (permissions, insecure page): the block below is still selectable.
+      setCopied("failed");
+    }
   }
 
   return (
@@ -82,7 +87,7 @@ export function Seal() {
         <div className="mt-4">
           <div className="flex items-center justify-between text-xs text-mute">
             <span>Add to <code>.reviewpilot.yml</code> on your default branch</span>
-            <button type="button" onClick={copy} className="text-paper underline decoration-green underline-offset-4">{copied ? "Copied" : "Copy"}</button>
+            <button type="button" onClick={copy} className="text-paper underline decoration-green underline-offset-4">{copied === "yes" ? "Copied" : copied === "failed" ? "Copy failed, select the text" : "Copy"}</button>
           </div>
           <pre className="mt-2 overflow-x-auto rounded-md border border-line bg-panel p-3 font-mono text-xs text-paper">{out.yaml}</pre>
         </div>
