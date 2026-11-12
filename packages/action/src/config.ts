@@ -25,8 +25,12 @@ const FileConfig = type({
     "ignore?": "string[]",
     "min_severity?": Severity,
     "max_findings?": "0 < number.integer <= 50",
-    /** On a push: `changed` re-reads only files whose diff changed, `all` re-reads the whole PR. */
+    /** On a push: `changed` reviews only the lines changed since the last review, `all` the whole PR. */
     "scope?": "'changed' | 'all'",
+    /** A finding on code the PR does not change: `drop` it, or list it in the `summary`. */
+    "outside_diff?": "'drop' | 'summary'",
+    /** The score at which the ReviewPilot check passes. */
+    "pass_score?": "1 | 2 | 3 | 4 | 5",
   },
   "rules?": Rule.array(),
   "instructions?": "string",
@@ -49,6 +53,8 @@ export const DEFAULTS = {
     min_severity: "minor",
     max_findings: 20,
     scope: "changed",
+    outside_diff: "drop",
+    pass_score: 5,
   },
   rules: [],
   instructions: "",
@@ -57,7 +63,14 @@ export const DEFAULTS = {
 
 export type Config = {
   model: { name: string; verify: string; effort: "none" | "low" | "medium" | "high" };
-  review: { ignore: string[]; min_severity: (typeof SEVERITIES)[number]; max_findings: number; scope: "changed" | "all" };
+  review: {
+    ignore: string[];
+    min_severity: (typeof SEVERITIES)[number];
+    max_findings: number;
+    scope: "changed" | "all";
+    outside_diff: "drop" | "summary";
+    pass_score: 1 | 2 | 3 | 4 | 5;
+  };
   rules: Rule[];
   instructions: string;
   context_files: string[];

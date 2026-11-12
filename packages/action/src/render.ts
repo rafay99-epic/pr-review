@@ -1,8 +1,8 @@
 // Markdown for the inline comments and the one summary comment ReviewPilot keeps per PR.
 
 import type { Annotation, CheckUpdate } from "./github.ts";
-import type { Finding, State, Tracked } from "./state.ts";
-import { findingTag, SUMMARY_TAG, writeState } from "./state.ts";
+import type { Finding, Score, State, Tracked } from "./state.ts";
+import { findingTag, SEVERITIES, SUMMARY_TAG, writeState } from "./state.ts";
 
 const ORDER = { critical: 0, major: 1, minor: 2 } as const;
 export const bySeverity = <T extends Pick<Finding, "severity">>(a: T, b: T) => ORDER[a.severity] - ORDER[b.severity];
@@ -66,7 +66,22 @@ const tokens = (t: Run["tokens"]) => {
  * open finding as an annotation on its lines (GitHub takes up to 50 per update). A partial
  * review (files skipped, parts or checks that failed) is never green: 5/5 there is neutral.
  */
-export function checkResult(state: State, run: Run, summaryUrl: string, partial: boolean): CheckUpdate {
+/**
+ * Why the score is not 5/5, in one line a reader can act on: what is open, by severity, and
+ * the two ways to clear it. Empty at 5/5.
+ */
+export function blockers(state: State): string {
+  const open = state.findings.filter((f) => f.status === "open");
+  if (!open.length) return "";
+  const counts = SEVERITIES.flatMap((s) => {
+    const n = open.filter((f) => f.severity === s).length;
+    return n ? [`${n} ${s}`] : [];
+  });
+  return `**Not 5/5 because of:** ${counts.join(", ")}. Fix them, or reply to a finding (or resolve its thread) to dismiss it.`;
+}
+
+/** The check passes at `pass` (the repo's review.pass_score) or above, and never on a partial review. */
+export function checkResult(state: State, run: Run, summaryUrl: string, partial: boolean, pass: Score = 5): CheckUpdate {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const annotations: Annotation[] = open.slice(0, 50).map((f) => ({
     path: f.file,
@@ -79,12 +94,13 @@ export function checkResult(state: State, run: Run, summaryUrl: string, partial:
     message: clean(f.body).slice(0, 4000),
   }));
   return {
-    conclusion: state.score < 5 ? "failure" : partial ? "neutral" : "success",
+    conclusion: state.score < pass ? "failure" : partial ? "neutral" : "success",
     details_url: summaryUrl,
     output: {
       title: `${state.score}/5${partial ? " (partial)" : ""} · ${open.length} open · ${duration(run.seconds)}`,
       summary: [
-        `**${state.score}/5** on ${run.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        `**${state.score}/5** on ${run.head.slice(0, 7)}${pass < 5 && state.score >= pass ? ` (passes at ${pass}/5)` : ""}. [Full summary](${summaryUrl}).`,
+        ...(blockers(state) ? ["", blockers(state)] : []),
         ...(run.warning ? ["", `> ${run.warning}`] : []),
         ...(open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : []),
         "",
@@ -110,6 +126,7 @@ export function summaryBody(state: State, prev: State | undefined, outside: read
   lines.push("");
 
   if (open.length) {
+    lines.push(blockers(state), "");
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
     for (const f of open.filter((o) => !outside.includes(o))) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {

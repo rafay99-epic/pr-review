@@ -97,7 +97,7 @@ If both run, they race on the same summary comment.
 
 <p class="who">ReviewPilot · automatic</p>
 
-The first review of a PR reads every file. Later pushes reread only the files whose diff changed. Logs: `fly logs -a <your-app>`, each line prefixed with `[owner/repo#pr]`.
+The first review of a PR reads every file. Later pushes review only the lines changed since the last review. Logs: `fly logs -a <your-app>`, each line prefixed with `[owner/repo#pr]`.
 
 </li>
 <li>

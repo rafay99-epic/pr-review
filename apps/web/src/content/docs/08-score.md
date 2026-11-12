@@ -11,7 +11,7 @@ summary: Computed from verified findings, never asked of the model.
 | 2/5 | A critical issue: security, privacy, data loss, a broken build |
 | 1/5 | Several critical issues |
 
-Because it is derived from findings, the score only moves when findings change. The ReviewPilot check passes at 5/5 and fails below it, so "green check" means "no verified issues".
+Because it is derived from findings, the score only moves when findings change. The ReviewPilot check passes at 5/5 and fails below it, so "green check" means "no verified issues". Below 5/5 the summary and the check say what is in the way, for example *Not 5/5 because of: 2 minor*, and how to clear it. A repo that lets minor findings through sets `review.pass_score: 4`.
 
 ## Getting to 5/5
 
@@ -40,7 +40,7 @@ Push a fix, or reply to the comment (or resolve its thread) if it is not worth f
 
 <p class="who">ReviewPilot · on the push</p>
 
-It rereads the changed files, checks every open finding against the new code, and updates the score. At 5/5 the check turns green.
+It reviews only the lines you changed, checks every open finding against the new code, and updates the score. Code it already reviewed is not reviewed again, so the score settles. At 5/5 the check turns green.
 
 </li>
 </ol>

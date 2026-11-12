@@ -22,3 +22,22 @@ test("read_file stays inside the checkout, symlinks included", async () => {
     assert.doesNotMatch(await runTool(root, "read_file", { path }), /token/, path);
   }
 });
+
+test("changedSince lists the new-side lines changed between two commits", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const { changedSince } = await import("./git.ts");
+  const root = await mkdtemp(join(tmpdir(), "rp-git-"));
+  const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: root }).toString().trim();
+  git("init", "-q");
+  await writeFile(join(root, "a.ts"), "one\ntwo\nthree\nfour\n");
+  await writeFile(join(root, "b.ts"), "x\ny\nz\n");
+  git("add", "."), git("commit", "-qm", "1");
+  const first = git("rev-parse", "HEAD");
+  await writeFile(join(root, "a.ts"), "one\nTWO\nthree\nfour\nfive\n");
+  await writeFile(join(root, "b.ts"), "x\nz\n");
+  git("commit", "-qam", "2");
+  const lines = await changedSince(root, first, git("rev-parse", "HEAD"), []);
+  assert.deepEqual([...(lines.get("a.ts") ?? [])].sort(), [2, 5]);
+  assert.deepEqual([...(lines.get("b.ts") ?? [])], [1]); // a pure deletion marks where the code was
+  await assert.rejects(changedSince(root, "0000000000000000000000000000000000000000", "HEAD", []));
+});

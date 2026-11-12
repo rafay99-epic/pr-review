@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DEFAULTS, ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, type FileDiff, parseDiff, unquote } from "./diff.ts";
-import { checkResult, clean } from "./render.ts";
-import { chunk, focus, settle, stale } from "./review.ts";
+import { blockers, checkResult, clean } from "./render.ts";
+import { chunk, focus, type Limits, ranges, reportable, settle, stale } from "./review.ts";
 import { diffHash, findingTag, fingerprint, postedOnHead, readState, score, STATE_BUDGET, writeState } from "./state.ts";
 
 const DIFF = `diff --git a/src/a.ts b/src/a.ts
@@ -155,8 +155,39 @@ test("focus re-reads only files whose diff changed since the last review", () =>
   const file = (path: string, numbered: string): FileDiff => ({ path, status: "modified", commentable: new Set(), hunkOf: new Map(), numbered });
   const diffs = [file("a.ts", "1 + a"), file("b.ts", "1 + b"), file("c.ts", "1 + c")];
   const seen = { "a.ts": diffHash("1 + a"), "b.ts": diffHash("1 + old b") };
-  assert.deepEqual(focus(diffs, seen).map((d) => d.path), ["b.ts", "c.ts"]);
-  assert.deepEqual(focus(diffs, undefined).map((d) => d.path), ["a.ts", "b.ts", "c.ts"]);
+  assert.deepEqual(focus(diffs, seen).scope.map((d) => d.path), ["b.ts", "c.ts"]);
+  assert.deepEqual(focus(diffs, undefined).scope.map((d) => d.path), ["a.ts", "b.ts", "c.ts"]);
+});
+
+test("on a push, a changed file is reviewed only on the lines changed since the last review", () => {
+  const file = (path: string, numbered: string, lines: number[]): FileDiff => ({ path, status: "modified", commentable: new Set(lines), hunkOf: new Map(), numbered });
+  const diffs = [file("a.ts", "same", [1, 2]), file("b.ts", "new b", [10, 11, 12, 13]), file("c.ts", "new c", [5]), file("d.ts", "moved d", [7])];
+  const seen = { "a.ts": diffHash("same"), "b.ts": diffHash("old b"), "d.ts": diffHash("old d") };
+  // b.ts changed lines 11-12 (and a line outside its diff); d.ts only moved; c.ts was never read.
+  const since = new Map([["b.ts", new Set([11, 12, 40])]]);
+  const { scope, fresh } = focus(diffs, seen, since);
+  assert.deepEqual(scope.map((d) => d.path), ["b.ts", "c.ts"]);
+  assert.deepEqual([...fresh], [["b.ts", new Set([11, 12])]]);
+  // Without the last commit to compare against, changed files are read whole.
+  assert.deepEqual(focus(diffs, seen, undefined).fresh.size, 0);
+});
+
+test("new findings stay inside the PR, and inside the new lines on a push", () => {
+  const file = (path: string, lines: number[]): FileDiff => ({ path, status: "modified", commentable: new Set(lines), hunkOf: new Map(), numbered: "" });
+  const diffs = [file("a.ts", [1, 2, 3]), file("b.ts", [10, 11, 12]), file("old.ts", [5])];
+  const limits: Limits = { diffs, scope: [diffs[0], diffs[1]].filter((d) => d !== undefined), fresh: new Map([["b.ts", new Set([11])]]), incremental: true, outside: "drop" };
+  const at = (file: string, line: number, endLine = line) => reportable({ file, line, endLine }, limits);
+  assert.equal(at("a.ts", 2), true); // a file read whole: any changed line
+  assert.equal(at("a.ts", 9), false); // not a changed line
+  assert.equal(at("b.ts", 11), true); // changed since the last review
+  assert.equal(at("b.ts", 10), false); // reviewed before
+  assert.equal(at("b.ts", 9, 12), true); // a range touching a new line
+  assert.equal(at("old.ts", 5), false); // not touched by this push
+  assert.equal(at("other.ts", 1), false); // not in the PR at all
+  const summary: Limits = { ...limits, incremental: false, fresh: new Map(), outside: "summary" };
+  assert.equal(reportable({ file: "other.ts", line: 1, endLine: 1 }, summary), true);
+  assert.equal(reportable({ file: "a.ts", line: 9, endLine: 9 }, summary), true);
+  assert.equal(ranges(new Set([12, 13, 14, 40, 2])), "2, 12-14, 40");
 });
 
 test("reviewed file hashes survive the state round trip", () => {
@@ -202,6 +233,21 @@ test("an earlier finding is re-verified only when its file or cited code changed
   assert.equal(stale({ file: "x.ts", evidence: ["b.ts:3: y()"] }, new Set(["src/b.ts"])), true);
   assert.equal(stale({ file: "x.ts", evidence: ["./src/b.ts:3: y()"] }, new Set(["src/b.ts"])), true);
   assert.equal(stale({ file: "x.ts", evidence: ["src/a.tsx:3: y()"] }, new Set(["a.ts"])), false);
+});
+
+test("the check passes at the repo's pass_score and says what keeps it from 5/5", () => {
+  const run = { repo: "o/r", head: "abcdef0", model: "m", files: 1, reviewed: 1, candidates: 1, verified: 1, seconds: 5, timing: "", tokens: { prompt: 1, cached: 0 } };
+  const minor = { file: "a.ts", line: 1, endLine: 1, severity: "minor" as const, title: "t", body: "b", evidence: [], fp: "fp1", status: "open" as const };
+  const state = { head: "abcdef0", score: 4 as const, findings: [minor, { ...minor, fp: "fp2" }] };
+  assert.equal(checkResult(state, run, "u", false).conclusion, "failure");
+  assert.equal(checkResult(state, run, "u", false, 4).conclusion, "success");
+  assert.match(checkResult(state, run, "u", false, 4).output?.summary ?? "", /passes at 4\/5/);
+  assert.match(blockers(state), /Not 5\/5 because of:\*\* 2 minor\. Fix them, or reply/);
+  assert.equal(blockers({ head: "h", score: 5, findings: [] }), "");
+  assert.equal(loadConfig(undefined).config.review.pass_score, 5);
+  assert.equal(loadConfig("review:\n  pass_score: 4\n").config.review.pass_score, 4);
+  assert.match(loadConfig("review:\n  pass_score: 6\n").warning ?? "", /pass_score/);
+  assert.equal(loadConfig(undefined).config.review.outside_diff, "drop");
 });
 
 test("the check passes only at 5/5 and annotates each open finding", () => {

@@ -6,12 +6,12 @@ import { readFile } from "node:fs/promises";
 import { type } from "arktype";
 import { ignored, loadConfig, rulesFor } from "./config.ts";
 import { anchor, parseDiff } from "./diff.ts";
-import { checkoutPr, diff, fetchRef, readAt } from "./git.ts";
+import { changedSince, checkoutPr, diff, fetchRef, readAt } from "./git.ts";
 import { type CheckUpdate, createGitHub, type InlineComment, type Thread } from "./github.ts";
 import { createLlm } from "./llm.ts";
 import { createLog, seconds } from "./log.ts";
 import { bySeverity, checkResult, inlineBody, PROGRESS, progressBody, summaryBody } from "./render.ts";
-import { dedupe, focus, pool, review, settle } from "./review.ts";
+import { dedupe, focus, type Limits, pool, reportable, review, settle } from "./review.ts";
 import {
   diffHash,
   FINDING_TAG,
@@ -240,7 +240,16 @@ async function main() {
     // A push re-reads only files whose diff moved since the last review, unless the repo's
     // config says `scope: all`; `/review` reads everything.
     const seen = comment || config.review.scope === "all" ? undefined : prev?.files;
-    const scope = focus(diffs, seen);
+    // The lines changed since the last reviewed commit. Without that commit (history rewritten
+    // and gone) every changed file is read whole.
+    const since = seen && prev && prev.head !== pr.head.sha
+      ? await changedSince(root, prev.head, pr.head.sha, config.review.ignore).catch((e: unknown) => {
+        log.warn(`Could not diff against the last reviewed commit, so changed files are read whole: ${String(e)}`);
+        return undefined;
+      })
+      : undefined;
+    const { scope, fresh: freshLines } = focus(diffs, seen, since);
+    const limits: Limits = { diffs, scope, fresh: freshLines, incremental: seen !== undefined, outside: config.review.outside_diff };
     const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase("Review", () =>
       review({
         find,
@@ -253,6 +262,7 @@ async function main() {
         diffs,
         scope,
         previous,
+        limits,
         log: log.line,
       }),
     );
@@ -269,9 +279,10 @@ async function main() {
         const { line, endLine, severity } = settle(p, c.verdict);
         return { ...p, line, endLine, severity };
       });
+      // The verifier can move a finding; one it moved out of bounds is dropped like any other.
       const confirmed = checked
         .flatMap((c) => (!c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []))
-        .filter((f) => SEVERITIES.indexOf(f.severity) <= minRank)
+        .filter((f) => SEVERITIES.indexOf(f.severity) <= minRank && reportable(f, limits))
         .sort(bySeverity);
       // Drop findings that repeat each other or an earlier open or dismissed one. A finding
       // that matches a fixed one was reintroduced: it replaces the fixed entry and posts again.
@@ -420,7 +431,7 @@ async function main() {
 
       // Files skipped, parts that failed, or candidates whose check failed: not a full review.
       const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
-      const result = checkResult(state, run, `https://github.com/${repo}/pull/${number}#issuecomment-${summaryId}`, partial);
+      const result = checkResult(state, run, `https://github.com/${repo}/pull/${number}#issuecomment-${summaryId}`, partial, config.review.pass_score);
       // One bad annotation fails the whole update; the check must not stay "in progress".
       const finished = checkId !== undefined && (await gh.updateCheck(checkId, { status: "completed", completed_at: new Date().toISOString(), ...result }).then(() => true, () => false));
       if (checkId !== undefined && !finished && result.output) await finishCheck({ ...result, output: { ...result.output, annotations: [] } });

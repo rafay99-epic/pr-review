@@ -16101,8 +16101,12 @@ var FileConfig = type({
     "ignore?": "string[]",
     "min_severity?": Severity,
     "max_findings?": "0 < number.integer <= 50",
-    /** On a push: `changed` re-reads only files whose diff changed, `all` re-reads the whole PR. */
-    "scope?": "'changed' | 'all'"
+    /** On a push: `changed` reviews only the lines changed since the last review, `all` the whole PR. */
+    "scope?": "'changed' | 'all'",
+    /** A finding on code the PR does not change: `drop` it, or list it in the `summary`. */
+    "outside_diff?": "'drop' | 'summary'",
+    /** The score at which the ReviewPilot check passes. */
+    "pass_score?": "1 | 2 | 3 | 4 | 5"
   },
   "rules?": Rule.array(),
   "instructions?": "string",
@@ -16133,7 +16137,9 @@ var DEFAULTS = {
     ],
     min_severity: "minor",
     max_findings: 20,
-    scope: "changed"
+    scope: "changed",
+    outside_diff: "drop",
+    pass_score: 5
   },
   rules: [],
   instructions: "",
@@ -16264,6 +16270,40 @@ var diff = (root, from, to, ignore) => git(
   ".",
   ...ignore.map((g) => `:(glob,exclude)${g}`)
 );
+async function changedSince(root, from, to, ignore) {
+  const raw = await git(
+    root,
+    "-c",
+    "core.quotePath=off",
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "-M",
+    "--unified=0",
+    from,
+    to,
+    "--",
+    ".",
+    ...ignore.map((g) => `:(glob,exclude)${g}`)
+  );
+  const lines = /* @__PURE__ */ new Map();
+  let file;
+  for (const text of raw.split("\n")) {
+    if (text.startsWith("+++ ")) {
+      const path = text.slice(4);
+      file = path === "/dev/null" ? void 0 : /* @__PURE__ */ new Set();
+      if (file) lines.set(unquote(path).replace(/^b\//, ""), file);
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(text);
+    if (!hunk || !file) continue;
+    const start = Number(hunk[1]);
+    const count2 = hunk[2] === void 0 ? 1 : Number(hunk[2]);
+    if (count2 === 0) file.add(Math.max(1, start));
+    for (let n = start; n < start + count2; n++) file.add(n);
+  }
+  return lines;
+}
 var readAt = (root, ref, path) => git(root, "show", `${ref}:${path}`).catch((e) => {
   if (/does not exist in|exists on disk, but not in/.test(e.stderr ?? "")) return void 0;
   throw e;
@@ -16623,7 +16663,16 @@ var tokens = (t) => {
   const share = Math.floor(t.cached / t.prompt * 100);
   return `${count(t.prompt)} tokens in${share > 0 ? `, ${share}% cached` : ""}`;
 };
-function checkResult(state, run2, summaryUrl, partial) {
+function blockers(state) {
+  const open = state.findings.filter((f) => f.status === "open");
+  if (!open.length) return "";
+  const counts = SEVERITIES.flatMap((s) => {
+    const n = open.filter((f) => f.severity === s).length;
+    return n ? [`${n} ${s}`] : [];
+  });
+  return `**Not 5/5 because of:** ${counts.join(", ")}. Fix them, or reply to a finding (or resolve its thread) to dismiss it.`;
+}
+function checkResult(state, run2, summaryUrl, partial, pass = 5) {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const annotations = open.slice(0, 50).map((f) => ({
     path: f.file,
@@ -16636,12 +16685,13 @@ function checkResult(state, run2, summaryUrl, partial) {
     message: clean(f.body).slice(0, 4e3)
   }));
   return {
-    conclusion: state.score < 5 ? "failure" : partial ? "neutral" : "success",
+    conclusion: state.score < pass ? "failure" : partial ? "neutral" : "success",
     details_url: summaryUrl,
     output: {
       title: `${state.score}/5${partial ? " (partial)" : ""} \xB7 ${open.length} open \xB7 ${duration(run2.seconds)}`,
       summary: [
-        `**${state.score}/5** on ${run2.head.slice(0, 7)}. [Full summary](${summaryUrl}).`,
+        `**${state.score}/5** on ${run2.head.slice(0, 7)}${pass < 5 && state.score >= pass ? ` (passes at ${pass}/5)` : ""}. [Full summary](${summaryUrl}).`,
+        ...blockers(state) ? ["", blockers(state)] : [],
         ...run2.warning ? ["", `> ${run2.warning}`] : [],
         ...open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : [],
         "",
@@ -16663,6 +16713,7 @@ function summaryBody(state, prev, outside, run2) {
   }
   lines.push("");
   if (open.length) {
+    lines.push(blockers(state), "");
     lines.push("| Severity | Finding | Where |", "| --- | --- | --- |");
     for (const f of open.filter((o) => !outside.includes(o))) lines.push(`| ${f.severity} | ${flat(f.title).replaceAll("|", "\\|")} | ${link(f)} |`);
   } else {
@@ -16952,6 +17003,8 @@ Go through every changed file in your part. Look for:
 - inconsistency with how the same thing is done elsewhere in this repository
 - the repository rules, if any are given
 
+Report only on the lines this PR changes (and, where a file says so, only the lines changed since the last review). Read any other code you need for context, but a problem in code the PR does not change is out of scope.
+
 Do not report: formatting, naming or style; "add tests" or "add logging" as generic advice; problems that existed before this PR in code it does not touch; behaviour that a test in the diff or a code comment says is intended. That last exemption never covers security or privacy: if the intended behaviour itself lets one user's data reach another user, skips an auth or ownership check, or exposes a secret, report it.
 
 Severity:
@@ -17015,7 +17068,45 @@ function chunk(diffs, size) {
   if (current.length) parts.push(current);
   return parts;
 }
-var focus = (diffs, seen) => seen ? diffs.filter((d) => seen[d.path] !== diffHash(d.numbered)) : [...diffs];
+function focus(diffs, seen, since) {
+  const fresh = /* @__PURE__ */ new Map();
+  if (!seen) return { scope: [...diffs], fresh };
+  const scope2 = diffs.filter((d) => {
+    const before = seen[d.path];
+    if (before === diffHash(d.numbered)) return false;
+    if (before === void 0 || !since) return true;
+    const lines = new Set([...since.get(d.path) ?? []].filter((n) => d.commentable.has(n)));
+    if (!lines.size) return false;
+    fresh.set(d.path, lines);
+    return true;
+  });
+  return { scope: scope2, fresh };
+}
+function reportable(f, limits) {
+  const lo = Math.min(f.line, f.endLine);
+  const hi = Math.max(f.line, f.endLine);
+  const hits = (lines) => {
+    for (let n = lo; n <= hi; n++) if (lines.has(n)) return true;
+    return false;
+  };
+  const fresh = limits.fresh.get(f.file);
+  if (fresh) return hits(fresh);
+  if (limits.incremental && !limits.scope.some((d2) => d2.path === f.file)) return false;
+  const d = limits.diffs.find((x) => x.path === f.file);
+  if (!d) return limits.outside === "summary";
+  return limits.outside === "summary" || hits(d.commentable);
+}
+function ranges(lines) {
+  const sorted = [...lines].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i] ?? 0;
+    let end = start;
+    while (sorted[i + 1] === end + 1) end = sorted[++i] ?? end;
+    out.push(start === end ? `${start}` : `${start}-${end}`);
+  }
+  return out.join(", ");
+}
 function stale(f, changed) {
   const cited = [f.file, ...f.evidence.flatMap((e) => e.match(PATH_TOKEN) ?? [])].map((p) => p.replace(/^\.\//, ""));
   return cited.some((c) => [...changed].some((p) => c === p || p.endsWith(`/${c}`) || c.endsWith(`/${p}`)));
@@ -17052,8 +17143,13 @@ ${input2.pr.body.slice(0, 4e3) || "(none)"}`,
 ${all}`,
       `Your part (${i + 1} of ${chunks.length}). Diff, left column is the line number at the PR head; + added, - removed:
 
-${part.map((d) => `## ${d.path} (${d.status})
-${d.numbered}`).join("\n\n")}`
+${part.map((d) => {
+        const fresh = input2.limits.fresh.get(d.path);
+        const note = fresh ? `
+Changed since the last review: lines ${ranges(fresh)}. Report only problems on these lines; the rest of this diff was reviewed before and is here as context.` : "";
+        return `## ${d.path} (${d.status})${note}
+${d.numbered}`;
+      }).join("\n\n")}`
     ].join("\n\n");
     return runAgent({
       llm: input2.find,
@@ -17078,8 +17174,10 @@ ${d.numbered}`).join("\n\n")}`
   const ruleIds = new Set(input2.rules.map((r) => r.id));
   const candidates = parts.flatMap((p) => p?.findings ?? []);
   const exists = await Promise.all(candidates.map((c) => inside(input2.root, c.file).then(Boolean)));
-  const found = candidates.filter((_, i) => exists[i]).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
-  if (found.length < candidates.length) log2(`find: dropped ${candidates.length - found.length} candidates citing files not in the repo`);
+  const real = candidates.filter((_, i) => exists[i]);
+  if (real.length < candidates.length) log2(`find: dropped ${candidates.length - real.length} candidates citing files not in the repo`);
+  const found = real.filter((c) => reportable(c, input2.limits)).map(({ rule, ...c }) => rule && ruleIds.has(rule) ? { ...c, rule } : c).sort(bySeverity);
+  if (found.length < real.length) log2(`find: dropped ${real.length - found.length} candidates outside the lines this review covers`);
   log2(`find: ${found.length} candidates${found.length > MAX_VERIFY ? `, verifying the ${MAX_VERIFY} most severe` : ""}`);
   const changedPaths = new Set(input2.scope.map((d) => d.path));
   const recheck = open.filter((p) => diffs.some((d) => d.path === p.file));
@@ -17326,7 +17424,12 @@ ${text}` : "";
     const find = llm(model);
     const verify = verifyModel === model ? find : llm(verifyModel);
     const seen = comment || config.review.scope === "all" ? void 0 : prev?.files;
-    const scope2 = focus(diffs, seen);
+    const since = seen && prev && prev.head !== pr.head.sha ? await changedSince(root, prev.head, pr.head.sha, config.review.ignore).catch((e) => {
+      log.warn(`Could not diff against the last reviewed commit, so changed files are read whole: ${String(e)}`);
+      return void 0;
+    }) : void 0;
+    const { scope: scope2, fresh: freshLines } = focus(diffs, seen, since);
+    const limits = { diffs, scope: scope2, fresh: freshLines, incremental: seen !== void 0, outside: config.review.outside_diff };
     const { checked, candidates, verified, failedParts, parts, reviewed, findMs, verifyMs } = await log.phase(
       "Review",
       () => review({
@@ -17340,6 +17443,7 @@ ${text}` : "";
         diffs,
         scope: scope2,
         previous,
+        limits,
         log: log.line
       })
     );
@@ -17352,7 +17456,7 @@ ${text}` : "";
         const { line, endLine, severity } = settle(p, c.verdict);
         return { ...p, line, endLine, severity };
       });
-      const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank).sort(bySeverity);
+      const confirmed = checked.flatMap((c) => !c.previous && c.verdict?.verdict === "confirmed" ? [settle(c.finding, c.verdict)] : []).filter((f) => SEVERITIES.indexOf(f.severity) <= minRank && reportable(f, limits)).sort(bySeverity);
       const known = findings2.filter((t) => t.status !== "fixed");
       const fresh2 = [];
       let overCap2 = 0;
@@ -17477,7 +17581,7 @@ ${summaryBody(state, prev, outside, run2)}`);
       });
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
       const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
-      const result = checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`, partial);
+      const result = checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`, partial, config.review.pass_score);
       const finished = checkId !== void 0 && await gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...result }).then(() => true, () => false);
       if (checkId !== void 0 && !finished && result.output) await finishCheck({ ...result, output: { ...result.output, annotations: [] } });
     });

@@ -10,9 +10,9 @@ Docs: [reviewpilotbot.rafay99.com](https://reviewpilotbot.rafay99.com/docs/)
 
 1. **Find.** The diff is split into parts and each part goes to an agent with read-only tools (read a file, search the repo, list a directory). It opens callers, types and guards as it needs them and lists every specific suspicion.
 2. **Verify.** Each candidate goes to a fresh agent that assumes it is wrong. It traces the trigger through the real code, looks for a guard that already prevents it, and confirms only what holds up.
-3. **Post.** Confirmed findings become inline comments. One summary comment shows the score and what changed since the last push. The ReviewPilot check passes at 5/5, fails below, and annotates every open finding on its lines.
+3. **Post.** Confirmed findings become inline comments. One summary comment shows the score and what changed since the last push. The ReviewPilot check passes at 5/5 (or the repo's `pass_score`), fails below with what is in the way, and annotates every open finding on its lines.
 
-On a push, only files whose diff changed since the last review are read again. `/review` reads everything.
+Findings must be on lines the PR changes; agents read other code only for context. On a push, only the lines changed since the last review are reviewed, so fixes are reviewed for themselves and the score settles. `/review` reviews everything.
 
 The tools never run PR code and cannot leave the checkout.
 
@@ -137,7 +137,9 @@ review:
   ignore: ["docs/**"]           # added to the built-in lockfile/build/asset ignores
   min_severity: minor           # minor | major | critical
   max_findings: 20
-  scope: changed                # changed: a push re-reads only changed files | all: the whole PR
+  scope: changed                # changed: a push reviews only lines changed since the last review | all: the whole PR
+  outside_diff: drop            # drop findings on code the PR does not change | summary: list them
+  pass_score: 5                 # the check passes at this score
 
 # Read as repo guidance on every review (default: AGENTS.md and CLAUDE.md).
 context_files: [AGENTS.md, CLAUDE.md]
