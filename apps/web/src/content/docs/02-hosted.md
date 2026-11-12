@@ -44,8 +44,9 @@ Prefer the terminal? This gives the same result:
 OWNER=your-account
 OWNER_ID=$(curl -fsS https://api.github.com/users/$OWNER | jq -e .id) &&
 curl -fsS https://reviewpilotbot.rafay99.com/seal-key.pem -o seal-key.pem &&
-printf '{"v":1,"owner":"%s","owner_id":%s,"key":"%s","base_url":"%s"}' \
-  "$OWNER" "$OWNER_ID" "$MODEL_KEY" https://api.commandcode.ai/provider/v1 \
+jq -nc --arg owner "$OWNER" --argjson id "$OWNER_ID" --arg key "$MODEL_KEY" \
+  --arg url https://api.commandcode.ai/provider/v1 \
+  '{v: 1, owner: $owner, owner_id: $id, key: $key, base_url: $url}' \
   | openssl pkeyutl -encrypt -pubin -inkey seal-key.pem \
       -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 \
   | base64 | tr -d '\n'
@@ -92,8 +93,10 @@ When a repository has the App but no usable key, the PR gets a **ReviewPilot** c
 | this repository has no model key yet | Add `sealed_key` to `.reviewpilot.yml` on the default branch |
 | the sealed key belongs to *another-account* | You sealed it for a different account, or the repository moved to another owner. Seal it again for the account that owns it now |
 | the sealed key could not be opened | It was sealed for a different server, or got cut while pasting. Seal it again and paste the whole block |
+| sealed_key in .reviewpilot.yml is not a sealed key | The value is empty, not text, or the file is not valid YAML. Paste the whole `sealed_key: \|` block the form gives you |
 | the sealed key is not in the expected format | It was sealed by hand with a mistake in the JSON. Use the form above, or copy the `printf` line exactly |
 | the webhook did not say who owns this repository | A GitHub delivery came without the owner. Comment `/review` to try again; if it repeats, open an issue |
+| *ReviewPilot could not start* (check title) | Starting the review kept failing, usually because GitHub was briefly unavailable. Comment `/review` |
 | this server does not accept sealed keys | The server you installed is not set up for sealed keys (a self-hosted one without `SEAL_KEY`). Ask its owner |
 | the sealed key's base_url must be an https URL | Seal it again with an `https://` provider URL |
 
