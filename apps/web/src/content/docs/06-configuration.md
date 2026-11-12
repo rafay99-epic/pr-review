@@ -3,9 +3,42 @@ title: Configuration
 summary: Every key is optional. No file means sensible defaults.
 ---
 
-Add `.reviewpilot.yml` to the repository root. It is read from the default branch, so a pull request cannot change its own review. An invalid file falls back to the defaults and says why in the summary.
+<ol class="steps">
+<li>
+
+### Create `.reviewpilot.yml` at the repository root
+
+<p class="who">You · your repository</p>
+
+Start from the example below and keep only what you want to change. A repository without the file runs on the defaults.
+
+</li>
+<li>
+
+### Commit it to the default branch
+
+<p class="who">You · usually `main`</p>
+
+ReviewPilot reads the file from the default branch only, so a pull request cannot loosen its own review. A change made inside a PR applies once that PR is merged.
+
+</li>
+<li>
+
+### Check the next summary
+
+<p class="who">ReviewPilot · next review</p>
+
+An invalid file (bad YAML, a typo in a key, a wrong value) is never silently ignored: the review runs on the defaults and the summary says what was wrong.
+
+</li>
+</ol>
+
+## Example
 
 ```yaml
+sealed_key: |          # hosted bot only: your sealed model key
+  dGhpcyBpcyBub3QgYSByZWFsIGtleQ...
+
 model:
   name: z-ai/glm-5.3-flash
   verify: z-ai/glm-5.3-flash
@@ -33,7 +66,8 @@ rules:
 
 | Key | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `model.name` | string | `z-ai/glm-5.3-flash` | Model for the find pass |
+| `sealed_key` | string | none | Your model key, sealed for the [hosted bot](#hosted) or a [server that accepts sealed keys](#server). Ignored by the Action |
+| `model.name` | string | `z-ai/glm-5.3-flash` | Model for the find pass. Must be one your provider offers |
 | `model.verify` | string | same as `model.name` | Model for the verify pass; a stronger one here costs little |
 | `model.effort` | `none` `low` `medium` `high` | `medium` | Sent as `reasoning_effort`; `none` leaves it out |
 | `review.ignore` | glob list | lockfiles, build output, images | Added to the built-in list, never replacing it |
@@ -48,6 +82,8 @@ rules:
 | `rules[].paths` | glob list | every file | The rule applies when a changed file matches |
 
 ## Action inputs
+
+Only for the [GitHub Action](#action), set under `with:` in the workflow.
 
 | Input | Default | Notes |
 | --- | --- | --- |

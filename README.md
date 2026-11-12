@@ -2,9 +2,9 @@
 
 # ReviewPilot
 
-An open-source PR reviewer that reads the code it needs, re-checks every finding against that code, and posts only what it can prove. Bring your own model key. No dashboard. Runs in GitHub Actions, or as a small server you host for busy repos.
+An open-source PR reviewer that reads the code it needs, re-checks every finding against that code, and posts only what it can prove. Bring your own model key. No dashboard. Use the hosted bot, run it in GitHub Actions, or host the small server yourself.
 
-Docs: [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)
+Docs: [reviewpilotbot.rafay99.com](https://reviewpilotbot.rafay99.com/docs/)
 
 ## How a review works
 
@@ -31,6 +31,25 @@ The score comes from the verified findings, never from the model's opinion, so i
 On every push, earlier findings are re-checked: they show as fixed, still open, or new. A fixed finding gets a "Fixed in" reply and its comment is collapsed as outdated; the thread is also resolved when the token has Contents write (GitHub requires it for Apps to resolve threads). A finding whose thread you resolve or reply to counts as dismissed and is not raised again.
 
 ## Use it
+
+Three ways, all on your own model key ([compare them](https://reviewpilotbot.rafay99.com/docs/#start)):
+
+| | Setup | Guide |
+| --- | --- | --- |
+| **Hosted bot** | Install [reviewpilot-bot](https://github.com/apps/reviewpilot-bot), seal your key, add it to `.reviewpilot.yml` | [Hosted bot](https://reviewpilotbot.rafay99.com/docs/#hosted) |
+| **GitHub Action** | One secret and the workflow below | [GitHub Action](https://reviewpilotbot.rafay99.com/docs/#action) |
+| **Your own server** | Your GitHub App and a Fly.io machine | [Your own server](https://reviewpilotbot.rafay99.com/docs/#server) |
+
+### Hosted bot
+
+Install [reviewpilot-bot](https://github.com/apps/reviewpilot-bot) on your repos, seal your model key on the [Hosted bot page](https://reviewpilotbot.rafay99.com/docs/#hosted) (it is encrypted in your browser, for your account only), and commit it to `.reviewpilot.yml` on your default branch:
+
+```yaml
+sealed_key: |
+  <the sealed key>
+```
+
+### GitHub Action
 
 ```yaml
 # .github/workflows/reviewpilot.yml
@@ -101,7 +120,7 @@ fly secrets set -a <your-app> WEBHOOK_SECRET=... APP_ID=... PRIVATE_KEY="$(cat a
 fly deploy -a <your-app> --ha=false
 ```
 
-Point the App's webhook at `https://<your-app>.fly.dev/webhook`, subscribe it to Pull request and Issue comment, and remove the workflow from those repos. From then on, installing the App on a repo is all it takes. `.github/workflows/deploy.yml` redeploys on every merge to `main`. Full guide: [Run it as a server](https://reviewpilot.rafay99.com/docs/#server).
+Point the App's webhook at `https://<your-app>.fly.dev/webhook`, subscribe it to Pull request and Issue comment, and remove the workflow from those repos. From then on, installing the App on a repo is all it takes. `.github/workflows/deploy.yml` redeploys on every merge to `main`. Set `SEAL_KEY` too and other accounts can use your server with their own sealed keys, the way the hosted bot works. Full guide: [Your own server](https://reviewpilotbot.rafay99.com/docs/#server).
 
 ## Configure
 
@@ -150,7 +169,7 @@ rules:
 
 ## Develop
 
-A Turborepo with three workspaces: `packages/action` (the reviewer), `packages/server` (the webhook server) and `apps/web` (the site and docs, [reviewpilot.rafay99.com](https://reviewpilot.rafay99.com)).
+A Turborepo with three workspaces: `packages/action` (the reviewer), `packages/server` (the webhook server) and `apps/web` (the site and docs, [reviewpilotbot.rafay99.com](https://reviewpilotbot.rafay99.com)).
 
 ```sh
 pnpm install
@@ -164,4 +183,4 @@ REVIEWPILOT_API_KEY=... pnpm --filter @reviewpilot/action local owner/repo 123  
 
 ## My repos
 
-My repos are reviewed by the server: the ReviewPilot Bot App is installed on all of them and sends its webhooks to `reviewpilot-rafay` on Fly.io, so a new repo is covered without any setup. The old per-repo workflows (`caller.yml` calling `.github/workflows/review.yml`, added by `enable.sh`) are disabled.
+My repos are reviewed by the hosted server: the ReviewPilot Bot App is installed on all of them, so a new repo is covered without any setup. The old per-repo workflows (`caller.yml` calling `.github/workflows/review.yml`, added by `enable.sh`) are disabled.

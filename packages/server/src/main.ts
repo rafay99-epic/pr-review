@@ -1,20 +1,22 @@
 // ReviewPilot's webhook server. GitHub App deliveries become jobs; each job runs the action
-// bundle as a child process against a warm clone on the data volume. Jobs are saved to disk
+// bundle as a child process against a warm clone on the data volume, on the model key the
+// repo is entitled to (see model-key.ts). Jobs are saved to disk
 // until they finish, so a deploy or restart resumes them. The process exits after a quiet
 // spell and the platform starts it again on the next delivery, so it only costs while working.
 
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createPrivateKey, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, statfs, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { type } from "arktype";
-import { createApp } from "./github-app.ts";
+import { createApp, repoApi } from "./github-app.ts";
+import { chooseKey, type ModelKey, ownerOf, publicPem, sealedKeyOf } from "./model-key.ts";
 import { createQueue, type Job, keyOf, type Run } from "./queue.ts";
-import { allowedRepo, toJob, verify } from "./webhook.ts";
+import { toJob, verify } from "./webhook.ts";
 
 const exec = promisify(execFile);
 
@@ -25,7 +27,14 @@ function required(name: string): string {
 }
 
 const SECRET = required("WEBHOOK_SECRET");
-const API_KEY = required("REVIEWPILOT_API_KEY");
+/** The server's own model key, for repos in REPOS. Without it every repo brings its own. */
+const API_KEY = process.env.REVIEWPILOT_API_KEY || undefined;
+/** Opens keys that repos seal for this server. Without it, sealed keys are not accepted. */
+const SEAL_KEY = process.env.SEAL_KEY ? createPrivateKey(process.env.SEAL_KEY.replace(/\\n/g, "\n")) : undefined;
+/** The docs the setup checks link to: the hosted bot guide for keys, the questions for the rest. */
+const DOCS = process.env.DOCS_URL ?? "https://reviewpilotbot.rafay99.com/docs/";
+const KEY_DOCS = `${DOCS}#hosted`;
+const HELP_DOCS = `${DOCS}#faq`;
 const app = createApp(required("APP_ID"), required("PRIVATE_KEY").replace(/\\n/g, "\n"));
 const DATA = process.env.DATA_DIR ?? "/data";
 const ACTION = process.env.ACTION_PATH ?? join(import.meta.dirname, "action.mjs");
@@ -43,6 +52,12 @@ const MAX_BODY = 25 * 1024 * 1024;
 const CLONE_TIMEOUT_MS = 10 * 60_000;
 /** Retries for a review that failed before it started, such as a GitHub outage. */
 const MAX_ATTEMPTS = 2;
+/** A clone unused this long is deleted at startup, so repos that left do not fill the volume. */
+const CLONE_TTL_MS = 14 * 24 * 60 * 60_000;
+/** How far back a fresh start looks for webhooks GitHub could not deliver. */
+const REDELIVER_WINDOW_MS = 30 * 60_000;
+/** Free space a new clone needs on the volume; older clones make way (see makeRoom). */
+const MIN_FREE_BYTES = 1.5 * 1024 ** 3;
 
 const SavedJob = type({
   repo: "string",
@@ -69,6 +84,40 @@ const gitEnv = (token: string) => ({
   GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
 });
 
+/** The key for a job's repo. `.reviewpilot.yml` is read from the default branch, so a PR cannot swap it. */
+async function modelKey(job: Job, token: string): Promise<ModelKey> {
+  const owner = ownerOf(job.payload);
+  if (!owner) return { missing: "the webhook did not say who owns this repository" };
+  const sealed = sealedKeyOf(await repoApi(token, job.repo).file(".reviewpilot.yml"));
+  return chooseKey({ sealed, sealKey: SEAL_KEY, apiKey: API_KEY, repos: REPOS, repo: job.repo, owner });
+}
+
+/** Clone folders in use by a running review; the space check never deletes these. */
+const busy = new Set<string>();
+
+/**
+ * Keeps MIN_FREE_BYTES free on the volume before a clone, deleting the least recently used
+ * clones that no review is using. Anyone can seal a key for their own repos, so this, not the
+ * key check, is what stops many installs from filling the disk.
+ */
+async function makeRoom() {
+  const free = async () => {
+    const s = await statfs(DATA);
+    return s.bavail * s.bsize;
+  };
+  if ((await free()) >= MIN_FREE_BYTES) return;
+  const root = join(DATA, "repos");
+  const idle = (await readdir(root)).filter((name) => !busy.has(name.replace(/\.partial$/, "")));
+  const clones = await Promise.all(idle.map(async (name) => ({ dir: join(root, name), used: await stat(join(root, name)).then((st) => st.mtimeMs, () => 0) })));
+  for (const clone of clones.sort((a, b) => a.used - b.used)) {
+    if ((await free()) >= MIN_FREE_BYTES) return;
+    // A review may have taken this clone since the list was made.
+    if (busy.has(basename(clone.dir).replace(/\.partial$/, ""))) continue;
+    await rm(clone.dir, { recursive: true, force: true });
+  }
+  if ((await free()) < MIN_FREE_BYTES) throw new Error("the data volume is full");
+}
+
 /** Runs one review: the clone (made once, reused after), then the action with a fresh token. */
 function run(job: Job): Run {
   const key = keyOf(job);
@@ -83,22 +132,46 @@ function run(job: Job): Run {
 
   const done = (async () => {
     const started = Date.now();
+    // The key comes first: a repo that has none is never cloned, so installing the App alone
+    // cannot fill the volume. It needs only the GitHub API, not the clone.
+    const model = await modelKey(job, await app.token(job.installation));
+    if ("missing" in model) {
+      say(key, `no model key: ${model.missing}`);
+      if (stopped) return;
+      // Nothing to review with: the PR says what to do instead of staying silent.
+      const api = repoApi(await app.token(job.installation), job.repo);
+      const sha = await api.headSha(job.number);
+      // Checked again after the lookups: a newer push may have stopped this run meanwhile.
+      if (stopped) return;
+      await api.blocked(sha, "Add your model key", `ReviewPilot did not run: ${model.missing}.\n\nSee [Add your model key](${KEY_DOCS}).`, KEY_DOCS);
+      return;
+    }
     const dir = join(DATA, "repos", slug(job.repo));
+    busy.add(slug(job.repo));
     if (!existsSync(join(dir, ".git"))) {
       say(key, "cloning");
+      await makeRoom();
       // Cloned beside the final path and renamed when complete: a stopped or timed-out clone
       // never leaves a half-made repo that later runs would reuse.
       const partial = `${dir}.partial`;
       await rm(partial, { recursive: true, force: true });
       await rm(dir, { recursive: true, force: true });
       const token = await app.token(job.installation);
-      await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, partial], {
-        env: gitEnv(token),
-        signal: cloning.signal,
-        timeout: CLONE_TIMEOUT_MS,
-      });
+      try {
+        await exec("git", ["clone", "--quiet", "--filter=blob:none", `https://github.com/${job.repo}.git`, partial], {
+          env: gitEnv(token),
+          signal: cloning.signal,
+          timeout: CLONE_TIMEOUT_MS,
+        });
+      } catch (e) {
+        // A failed or stopped clone's half-made folder goes now, not when disk runs low.
+        await rm(partial, { recursive: true, force: true });
+        throw e;
+      }
       await rename(partial, dir);
     }
+    // Last used now, for the clone cleanup at startup.
+    await utimes(dir, new Date(), new Date());
     // Minted after the clone, so the review gets the token's full hour (MAX_RUN_MS is below it).
     const [token, login] = await Promise.all([app.token(job.installation), app.login()]);
     // A run killed mid-checkout can leave the lock behind; runs on one repo never overlap.
@@ -115,7 +188,8 @@ function run(job: Job): Run {
         GITHUB_WORKSPACE: dir,
         GITHUB_EVENT_PATH: eventPath,
         INPUT_GITHUB_TOKEN: token,
-        INPUT_API_KEY: API_KEY,
+        INPUT_API_KEY: model.key,
+        ...(model.baseUrl ? { INPUT_BASE_URL: model.baseUrl } : {}),
         INPUT_BOT_LOGIN: login,
         // No job timeout here, so agents get more time than in a workflow (see review.ts).
         REVIEWPILOT_FIND_SECONDS: "480",
@@ -145,11 +219,23 @@ function run(job: Job): Run {
       if (!spawned && !stopped && attempt <= MAX_ATTEMPTS) {
         say(key, `retrying (${attempt} of ${MAX_ATTEMPTS})`);
         void enqueue({ ...job, attempt, debounce: true }).catch(() => undefined);
+      } else if (!spawned && !stopped) {
+        // Out of retries before the review started: say so on the PR rather than stay silent.
+        // The error names the step (reading the config, cloning, a GitHub call), never a token.
+        const reason = (e instanceof Error ? e.message : String(e)).split("\n")[0]?.slice(0, 200) ?? "";
+        void (async () => {
+          const api = repoApi(await app.token(job.installation), job.repo);
+          await api.blocked(await api.headSha(job.number), "ReviewPilot could not start", `Starting the review kept failing. Last error: \`${reason}\`.\n\nComment \`/review\` to try again.`, HELP_DOCS);
+        })().catch((err: unknown) => say(key, `could not report the failure: ${String(err)}`));
       }
     })
     // The file stays when a newer delivery for this PR rewrote it, or when a shutdown cut
     // the run short, so the job runs again after the restart.
-    .finally(() => (shuttingDown || queue.pending(key) ? undefined : rm(jobFile(key), { force: true })));
+    .finally(() => {
+      // One review per repo at a time, so this run was the folder's only user.
+      busy.delete(slug(job.repo));
+      return shuttingDown || queue.pending(key) ? undefined : rm(jobFile(key), { force: true });
+    });
 
   return { done, stop: () => stop() };
 }
@@ -183,6 +269,10 @@ let shuttingDown = false;
 
 const server = createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/health") return void res.end("ok");
+  // The public half of SEAL_KEY, for sealing a key with openssl or the website.
+  if (req.method === "GET" && req.url === "/seal-key" && SEAL_KEY) {
+    return void res.writeHead(200, { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" }).end(publicPem(SEAL_KEY));
+  }
   if (req.method !== "POST" || req.url !== "/webhook") return void res.writeHead(404).end();
 
   const chunks: Buffer[] = [];
@@ -199,7 +289,7 @@ const server = createServer(async (req, res) => {
   const event = req.headers["x-github-event"]?.toString() ?? "";
   let job: Job | undefined;
   try {
-    job = toJob(event, JSON.parse(body.toString("utf8")), REPOS);
+    job = toJob(event, JSON.parse(body.toString("utf8")));
   } catch {
     return void res.writeHead(400).end();
   }
@@ -212,6 +302,11 @@ const server = createServer(async (req, res) => {
 
 async function start() {
   for (const dir of ["jobs", "events", "repos"]) await mkdir(join(DATA, dir), { recursive: true });
+  for (const name of await readdir(join(DATA, "repos"))) {
+    const dir = join(DATA, "repos", name);
+    const used = await stat(dir).then((s) => s.mtimeMs, () => 0);
+    if (Date.now() - used > CLONE_TTL_MS) await rm(dir, { recursive: true, force: true });
+  }
   // Jobs left from before a restart run first, without waiting for a debounce.
   for (const name of await readdir(join(DATA, "jobs"))) {
     const file = join(DATA, "jobs", name);
@@ -219,15 +314,25 @@ async function start() {
     const saved = name.endsWith(".json")
       ? await readFile(file, "utf8").then((text) => SavedJob(JSON.parse(text)), () => undefined).catch(() => undefined)
       : undefined;
-    // Same gate as a fresh delivery: REPOS may have narrowed since the job was saved.
-    if (!saved || saved instanceof type.errors || !allowedRepo(REPOS, saved.repo)) {
+    if (!saved || saved instanceof type.errors) {
       await rm(file, { force: true });
       continue;
     }
     say(keyOf(saved), "resumed");
     queue.schedule({ ...saved, debounce: false });
   }
-  server.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log(`listening, repos: ${[...REPOS].join(", ") || "all installed"}`));
+  server.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log(`listening; server key for: ${API_KEY ? [...REPOS].join(", ") || "every repo" : "none"}; sealed keys: ${SEAL_KEY ? "accepted" : "off"}`));
+
+  // GitHub gives a delivery 10 seconds and never retries it, so a network blip, a deploy or a
+  // cold start can drop a review. Shortly after starting, and every few minutes while up, ask
+  // GitHub to send again whatever failed recently.
+  const redeliver = () =>
+    void app
+      .redeliverFailed(Date.now() - REDELIVER_WINDOW_MS)
+      .then(({ resent, refused }) => (resent || refused) && console.log(`asked GitHub to redeliver ${resent} failed webhook(s)${refused ? `, ${refused} refused` : ""}`))
+      .catch((e: unknown) => console.log(`could not check failed webhooks: ${e instanceof Error ? e.message : String(e)}`));
+  setTimeout(redeliver, 15_000);
+  setInterval(redeliver, 2 * 60_000).unref();
 
   // Exit 0 when idle; the machine stops and the next delivery starts it again.
   setInterval(() => {

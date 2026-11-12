@@ -1,5 +1,5 @@
 // The home page story, from the problem to the first review. Every number and example here
-// comes from real ReviewPilot runs (Lumo #182 and ReviewPilot's own PR #6).
+// comes from real ReviewPilot runs.
 
 import type { ReactNode } from "react";
 import { useActive, useCountUp } from "../hooks.ts";
@@ -369,7 +369,7 @@ export function Start() {
           ))}
         </ol>
         <div data-reveal className="mt-12 flex flex-wrap gap-3">
-          <a href="/docs/#getting-started" className="rounded-lg bg-paper px-5 py-3 font-medium text-ink transition-transform hover:-translate-y-0.5">
+          <a href="/docs/#start" className="rounded-lg bg-paper px-5 py-3 font-medium text-ink transition-transform hover:-translate-y-0.5">
             Read the setup guide
           </a>
           <a href={REPO} className="rounded-lg border border-[#333] px-5 py-3 text-paper transition-colors hover:border-paper">

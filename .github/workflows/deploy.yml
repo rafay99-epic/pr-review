@@ -13,6 +13,7 @@ on:
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - .github/workflows/deploy.yml
+      - apps/web/public/seal-key.pem
   workflow_dispatch:
 
 permissions:
@@ -33,3 +34,23 @@ jobs:
       - run: flyctl deploy --remote-only --ha=false
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # The hosted bot's website seals keys with the committed public key; its server opens
+      # them with SEAL_KEY. If the server lost SEAL_KEY or holds a different one, every sealed
+      # key fails, so the deploy fails loudly. Only for the hosted bot: a fork deploys its own
+      # server, whose key (if any) is not the committed one.
+      - name: Seal key matches the website
+        if: github.repository == 'rafay99-epic/reviewpilot'
+        run: |
+          app=$(sed -n 's/^app *= *["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/p' fly.toml)
+          [ -n "$app" ] || { echo "::error::could not read app from fly.toml"; exit 1; }
+          curl -fsS --retry 5 --retry-all-errors "https://$app.fly.dev/seal-key" -o served.pem \
+            || { echo "::error::$app has no SEAL_KEY (or /seal-key failed); sealed keys cannot be opened"; exit 1; }
+          diff served.pem apps/web/public/seal-key.pem \
+            || { echo "::error::SEAL_KEY on $app does not match apps/web/public/seal-key.pem"; exit 1; }
+          # People seal against the website's copy, which Vercel deploys on its own; give it a
+          # few minutes to catch up after a change.
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            curl -fsS https://reviewpilotbot.rafay99.com/seal-key.pem -o site.pem && diff -q site.pem served.pem && exit 0
+            sleep 30
+          done
+          echo "::error::the website's seal-key.pem does not match SEAL_KEY on $app, or could not be fetched"; exit 1

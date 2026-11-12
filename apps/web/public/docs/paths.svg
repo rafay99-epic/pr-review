@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 330" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" role="img" aria-labelledby="t">
+  <title id="t">Three ways to run ReviewPilot: the hosted bot, the GitHub Action, or your own bot and server. Each takes three steps.</title>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#5c5c5c"/></marker></defs>
+  <rect x="290" y="6" width="200" height="40" rx="8" fill="none" stroke="#3a3a3a"/>
+  <text x="390" y="31" fill="#fff" font-size="14" text-anchor="middle">your repository</text>
+  <g stroke="#5c5c5c" fill="none" marker-end="url(#a)">
+    <path d="M330 46 C 300 70, 140 60, 130 86"/>
+    <path d="M390 46 L390 86"/>
+    <path d="M450 46 C 480 70, 640 60, 650 86"/>
+  </g>
+  <g font-size="13" text-anchor="middle">
+    <text x="130" y="106" fill="#3fb950">A · hosted bot</text>
+    <text x="390" y="106" fill="#fff">B · GitHub Action</text>
+    <text x="650" y="106" fill="#fff">C · your own server</text>
+  </g>
+  <g fill="none" stroke="#2a2a2a">
+    <rect x="30" y="120" width="200" height="38" rx="6" stroke="#3fb950"/><rect x="30" y="172" width="200" height="38" rx="6"/><rect x="30" y="224" width="200" height="38" rx="6"/>
+    <rect x="290" y="120" width="200" height="38" rx="6"/><rect x="290" y="172" width="200" height="38" rx="6"/><rect x="290" y="224" width="200" height="38" rx="6"/>
+    <rect x="550" y="120" width="200" height="38" rx="6"/><rect x="550" y="172" width="200" height="38" rx="6"/><rect x="550" y="224" width="200" height="38" rx="6"/>
+  </g>
+  <g fill="#fff" font-size="12" text-anchor="middle">
+    <text x="130" y="144">1 install the App</text><text x="130" y="196">2 seal your model key</text><text x="130" y="248">3 open a pull request</text>
+    <text x="390" y="144">1 add your key as a secret</text><text x="390" y="196">2 add the workflow file</text><text x="390" y="248">3 open a pull request</text>
+    <text x="650" y="144">1 create a GitHub App</text><text x="650" y="196">2 deploy to Fly.io</text><text x="650" y="248">3 install your App</text>
+  </g>
+  <g fill="#9a9a9a" font-size="11" text-anchor="middle">
+    <text x="130" y="290">nothing to run or host</text><text x="130" y="306">about 2 minutes</text>
+    <text x="390" y="290">runs on your Actions minutes</text><text x="390" y="306">capped by the job timeout</text>
+    <text x="650" y="290">your bot name and logo</text><text x="650" y="306">about 15 minutes</text>
+  </g>
+</svg>

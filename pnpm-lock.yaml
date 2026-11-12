@@ -234,6 +234,9 @@ importers:
       arktype:
         specifier: ^2.1.20
         version: 2.2.9
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

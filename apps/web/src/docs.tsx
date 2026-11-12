@@ -1,9 +1,11 @@
 // The docs page: every markdown file in content/docs, in file order, with a sticky sidebar
 // that follows the section being read.
 
-import { StrictMode } from "react";
+import { StrictMode, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { Footer, Nav } from "./components/chrome.tsx";
+import { Seal } from "./components/seal.tsx";
 import { useActive, useReveal } from "./hooks.ts";
 import "./styles.css";
 
@@ -17,6 +19,9 @@ const IDS = DOCS.map((d) => d.slug);
 function Docs() {
   useReveal();
   const active = useActive(IDS);
+  // The markdown leaves an empty `<div id="seal-tool">` where the sealing form goes.
+  const [sealHost, setSealHost] = useState<Element | null>(null);
+  useEffect(() => setSealHost(document.getElementById("seal-tool")), []);
   return (
     <>
       <Nav current="docs" />
@@ -48,6 +53,7 @@ function Docs() {
         </main>
       </div>
       <Footer />
+      {sealHost && createPortal(<Seal />, sealHost)}
     </>
   );
 }

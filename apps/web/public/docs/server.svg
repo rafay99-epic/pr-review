@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 210" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" role="img" aria-labelledby="t">
+  <title id="t">GitHub sends a webhook to the server on Fly.io. The server waits 60 seconds for more pushes, updates a saved clone, and runs the reviewer, which calls the model provider and posts comments and the check back to the pull request.</title>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#5c5c5c"/></marker></defs>
+  <g fill="none" stroke="#2a2a2a">
+    <rect x="10" y="40" width="150" height="60" rx="8"/>
+    <rect x="250" y="20" width="300" height="140" rx="10" stroke="#3fb950"/>
+    <rect x="270" y="56" width="120" height="40" rx="6"/><rect x="410" y="56" width="120" height="40" rx="6"/>
+    <rect x="270" y="108" width="260" height="36" rx="6"/>
+    <rect x="630" y="40" width="140" height="60" rx="8"/>
+  </g>
+  <g stroke="#5c5c5c" fill="none" marker-end="url(#a)">
+    <path d="M160 60H268"/><path d="M390 76H408"/><path d="M530 76H628"/>
+    <path d="M270 130 C 200 160, 120 140, 90 102"/>
+  </g>
+  <g fill="#fff" font-size="13" text-anchor="middle">
+    <text x="85" y="66">GitHub</text><text x="85" y="84" fill="#9a9a9a" font-size="11">your pull request</text>
+    <text x="400" y="42" fill="#3fb950" font-size="12">server on Fly.io</text>
+    <text x="330" y="81" font-size="12">wait 60 s</text><text x="470" y="81" font-size="12">saved clone</text>
+    <text x="400" y="131" font-size="12">reviewer (the same as the Action)</text>
+    <text x="700" y="66">model API</text><text x="700" y="84" fill="#9a9a9a" font-size="11">your key</text>
+  </g>
+  <g fill="#9a9a9a" font-size="11" text-anchor="middle">
+    <text x="205" y="52">webhook</text><text x="580" y="68">calls</text>
+    <text x="150" y="182">comments, summary, ReviewPilot check</text>
+  </g>
+</svg>

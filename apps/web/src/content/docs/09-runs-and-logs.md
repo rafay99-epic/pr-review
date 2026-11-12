@@ -7,7 +7,7 @@ summary: What a run costs, how long it takes, and where to look.
 
 Every phase of a run is logged with its duration: checkout, diff and context, review, merge, post. Each tool call an agent makes is logged with its arguments.
 
-In the workflow, phases are collapsible groups in the Actions log and the job summary gets a run report: the score, new, open and fixed counts, a table of phase timings, and the model's calls and tokens. On the [server](#server), the same lines go to its log, prefixed with the pull request.
+With the [hosted bot](#hosted) you see the summary footer and the check; the server log is not public. In the workflow, phases are collapsible groups in the Actions log and the job summary gets a run report: the score, new, open and fixed counts, a table of phase timings, and the model's calls and tokens. On the [server](#server), the same lines go to its log, prefixed with the pull request.
 
 ## Time
 
