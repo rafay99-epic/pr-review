@@ -57,7 +57,7 @@ test("a turn cut off at the deadline still ends in a submission, not a lost part
       // The normal turn runs past the deadline and times out; the forced one answers.
       if (!force) {
         await new Promise((r) => setTimeout(r, 120));
-        throw new Error("HTTP 0 TimeoutError");
+        throw new Error("m: HTTP 0 TimeoutError: The operation was aborted due to timeout");
       }
       return { role: "assistant" as const, content: null, tool_calls: [{ id: "1", type: "function" as const, function: { name: "submit_x", arguments: '{"n":1}' } }] };
     },
@@ -71,4 +71,10 @@ test("a turn cut off at the deadline still ends in a submission, not a lost part
   assert.deepEqual(forced, [undefined, "submit_x"]);
   // Before the deadline the same failure is a real error.
   await assert.rejects(runAgent({ llm, root: ".", system: "", user: "", submit, maxTurns: 5, deadline: Date.now() + 60_000, log: () => {} }));
+  // At the deadline, an error that is not an abort (rate limits out of retries) still fails the part.
+  const limited = { ...llm, async chat() {
+    await new Promise((r) => setTimeout(r, 120));
+    throw new Error("m: HTTP 429 rate limited");
+  } };
+  await assert.rejects(runAgent({ llm: limited, root: ".", system: "", user: "", submit, maxTurns: 5, deadline: Date.now() + 50, log: () => {} }), /429/);
 });

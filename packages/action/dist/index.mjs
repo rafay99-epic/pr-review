@@ -16896,7 +16896,8 @@ async function runAgent(opts) {
     try {
       reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : void 0, opts.deadline);
     } catch (e) {
-      if (warned || Date.now() < opts.deadline - 5e3) throw e;
+      const aborted = e instanceof Error && /: HTTP 0 /.test(e.message);
+      if (warned || !aborted || Date.now() < opts.deadline - 5e3) throw e;
       opts.log(`turn cut off at the deadline, submitting: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
       warned = true;
       messages.push({ role: "user", content: `You are out of time. Call ${name} now with what you have so far.` });

@@ -49,7 +49,11 @@ export async function runAgent<T>(opts: {
     try {
       reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : undefined, opts.deadline);
     } catch (e) {
-      if (warned || Date.now() < opts.deadline - 5_000) throw e;
+      // Only a call the deadline aborted (llm.ts reports those as HTTP 0) turns into the forced
+      // submission. Anything else, such as rate limits that outlasted their retries, still
+      // fails the part, so it is read again rather than recorded on a thin result.
+      const aborted = e instanceof Error && /: HTTP 0 /.test(e.message);
+      if (warned || !aborted || Date.now() < opts.deadline - 5_000) throw e;
       opts.log(`turn cut off at the deadline, submitting: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
       warned = true;
       messages.push({ role: "user", content: `You are out of time. Call ${name} now with what you have so far.` });
