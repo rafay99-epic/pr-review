@@ -34,16 +34,18 @@ Any OpenAI-compatible API works. The default is [Command Code](https://commandco
 
 <p class="who">You · this page · 10 seconds</p>
 
-Sealing encrypts the key so only the hosted server can read it, only for repositories of the account you name, and only to send it to the provider URL you name. It happens in your browser; the key is not sent anywhere.
+Sealing encrypts the key so only the hosted server can read it, only for repositories of the account you name (matched by its GitHub account id, so a rename keeps working and nobody who later takes the old name can use it), and only to send it to the provider URL you name. It happens in your browser; the key is not sent anywhere.
 
 <div id="seal-tool"></div>
 
 Prefer the terminal? This gives the same result:
 
 ```sh
-curl -sO https://reviewpilotbot.rafay99.com/seal-key.pem
-printf '{"v":1,"owner":"%s","key":"%s","base_url":"%s"}' \
-  your-account "$MODEL_KEY" https://api.commandcode.ai/provider/v1 \
+OWNER=your-account
+OWNER_ID=$(curl -s https://api.github.com/users/$OWNER | jq .id)
+curl -s https://reviewpilotbot.rafay99.com/seal-key.pem -o seal-key.pem
+printf '{"v":1,"owner":"%s","owner_id":%s,"key":"%s","base_url":"%s"}' \
+  "$OWNER" "$OWNER_ID" "$MODEL_KEY" https://api.commandcode.ai/provider/v1 \
   | openssl pkeyutl -encrypt -pubin -inkey seal-key.pem \
       -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 \
   | base64 | tr -d '\n'
@@ -88,7 +90,7 @@ When a repository has the App but no usable key, the PR gets a **ReviewPilot** c
 | Reason in the check | What to do |
 | --- | --- |
 | this repository has no model key yet | Add `sealed_key` to `.reviewpilot.yml` on the default branch |
-| the sealed key belongs to *another-account* | You sealed it for a different account. Seal it again with the account that owns this repository |
+| the sealed key belongs to *another-account* | You sealed it for a different account, or the repository moved to another owner. Seal it again for the account that owns it now |
 | the sealed key could not be opened | It was sealed for a different server, or got cut while pasting. Seal it again and paste the whole block |
 | the sealed key is not in the expected format | It was sealed by hand with a mistake in the JSON. Use the form above, or copy the `printf` line exactly |
 | this server does not accept sealed keys | The server you installed is not set up for sealed keys (a self-hosted one without `SEAL_KEY`). Ask its owner |

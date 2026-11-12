@@ -1,6 +1,7 @@
 // Seals a model key for the hosted bot, in the browser. The key is encrypted with the
 // server's public key (RSA-OAEP, SHA-256, /seal-key.pem) and never leaves the page; only the
-// server can open the result, and only for the account it was sealed for.
+// server can open the result, and only for the account it was sealed for. The account is
+// bound by its numeric GitHub id (looked up here), which survives renames and is never reused.
 
 import { type FormEvent, useState } from "react";
 
@@ -10,8 +11,18 @@ const MAX_BYTES = 446;
 
 const toDer = (pem: string) => Uint8Array.from(atob(pem.replace(/-----[^-]+-----|\s/g, "")), (c) => c.charCodeAt(0));
 
+async function accountId(login: string): Promise<number> {
+  const res = await fetch(`https://api.github.com/users/${encodeURIComponent(login)}`);
+  if (res.status === 404) throw new Error(`There is no GitHub account named ${login}.`);
+  if (!res.ok) throw new Error("Could not look up the account on GitHub. Try again in a minute.");
+  const body: unknown = await res.json();
+  const id = body && typeof body === "object" && "id" in body ? body.id : undefined;
+  if (typeof id !== "number") throw new Error("GitHub did not return an account id.");
+  return id;
+}
+
 async function sealKey(owner: string, key: string, baseUrl: string): Promise<string> {
-  const payload = new TextEncoder().encode(JSON.stringify({ v: 1, owner: owner.toLowerCase(), key, base_url: baseUrl }));
+  const payload = new TextEncoder().encode(JSON.stringify({ v: 1, owner, owner_id: await accountId(owner), key, base_url: baseUrl }));
   if (payload.length > MAX_BYTES) throw new Error("That key and URL are too long to seal together.");
   const res = await fetch("/seal-key.pem");
   if (!res.ok) throw new Error("Could not load the server's public key. Try again.");
@@ -64,7 +75,7 @@ export function Seal() {
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-4">
         <button type="submit" className="rounded-md bg-paper px-4 py-2 text-sm font-semibold text-ink hover:bg-[#e6e6e6]">Seal key</button>
-        <span className="text-xs text-mute">Encrypted in this page. Your key is not sent anywhere.</span>
+        <span className="text-xs text-mute">Encrypted in this page. Your key is not sent anywhere; only the account name is looked up on GitHub.</span>
       </div>
       {out?.ok === false && <p className="mt-4 text-sm text-red" role="alert">{out.error}</p>}
       {out?.ok && (

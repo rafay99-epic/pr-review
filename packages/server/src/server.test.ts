@@ -3,7 +3,7 @@ import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import { createQueue, type Job } from "./queue.ts";
 import { constants, generateKeyPairSync, publicEncrypt } from "node:crypto";
-import { seal, sealedKeyOf, unseal } from "./model-key.ts";
+import { chooseKey, seal, sealedKeyOf, unseal } from "./model-key.ts";
 import { allowedRepo, toJob, verify } from "./webhook.ts";
 
 const repository = { full_name: "me/app", owner: { login: "me" } };
@@ -52,19 +52,38 @@ test("allowedRepo matches owner/repo and owner/* entries, empty for all", () => 
   assert.equal(allowedRepo(new Set(["me/other", "other/*"]), "me/app"), false);
 });
 
-test("a sealed key opens only on its server, for its owner, toward an https provider", () => {
-  const pair = () => generateKeyPairSync("rsa", { modulusLength: 2048 });
-  const { publicKey, privateKey } = pair();
-  const blob = seal(publicKey, { v: 1, owner: "me", key: "sk-1", base_url: "https://api.example.com/v1" });
-  assert.deepEqual(unseal(privateKey, blob, "Me"), { key: "sk-1", baseUrl: "https://api.example.com/v1" });
-  assert.deepEqual(unseal(privateKey, seal(publicKey, { v: 1, owner: "me", key: "sk-1" }), "me"), { key: "sk-1" });
-  assert.match(String(Object.values(unseal(privateKey, blob, "thief"))[0]), /belongs to me/);
-  assert.ok("missing" in unseal(pair().privateKey, blob, "me"));
-  assert.ok("missing" in unseal(privateKey, "not base64 at all", "me"));
+const me = { login: "me", id: 42 };
+const keys = () => generateKeyPairSync("rsa", { modulusLength: 2048 });
+
+test("a sealed key opens only on its server, for its account id, toward a plain https provider", () => {
+  const { publicKey, privateKey } = keys();
+  const sealFor = (over: object = {}) => seal(publicKey, { v: 1, owner: "me", owner_id: 42, key: "sk-1", base_url: "https://api.example.com/v1", ...over });
+  assert.deepEqual(unseal(privateKey, sealFor(), me), { key: "sk-1", baseUrl: "https://api.example.com/v1" });
+  // A renamed account keeps its id; a new account that takes the old login does not.
+  assert.equal("key" in unseal(privateKey, sealFor(), { login: "me-renamed", id: 42 }), true);
+  assert.match(String(Object.values(unseal(privateKey, sealFor(), { login: "me", id: 7 }))[0]), /a different account that was named me/);
+  assert.match(String(Object.values(unseal(privateKey, sealFor(), { login: "you", id: 7 }))[0]), /belongs to me, not you/);
+  assert.deepEqual(unseal(privateKey, seal(publicKey, { v: 1, owner: "me", owner_id: 42, key: "sk-1" }), me), { key: "sk-1" });
+  assert.ok("missing" in unseal(keys().privateKey, sealFor(), me));
+  assert.ok("missing" in unseal(privateKey, "not base64 at all", me));
+  for (const base_url of ["http://api.example.com", "https://api.example.com@evil.test/v1", "https://u:p@evil.test", "not a url"]) {
+    assert.ok("missing" in unseal(privateKey, sealFor({ base_url }), me), base_url);
+  }
   const raw = (text: string) => publicEncrypt({ key: publicKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" }, Buffer.from(text)).toString("base64");
-  assert.match(String(Object.values(unseal(privateKey, raw("not json"), "me"))[0]), /expected format/);
-  assert.match(String(Object.values(unseal(privateKey, raw('{"v":1,"owner":"me"}'), "me"))[0]), /expected format/);
-  assert.ok("missing" in unseal(privateKey, seal(publicKey, { v: 1, owner: "me", key: "sk-1", base_url: "http://evil.test" }), "me"));
+  assert.match(String(Object.values(unseal(privateKey, raw("not json"), me))[0]), /expected format/);
+  assert.match(String(Object.values(unseal(privateKey, raw('{"v":1,"owner":"me","key":"sk-1"}'), me))[0]), /expected format/);
+});
+
+test("chooseKey: a sealed key wins, a refused one never falls back, REPOS gates the server key", () => {
+  const { publicKey, privateKey } = keys();
+  const sealed = seal(publicKey, { v: 1, owner: "me", owner_id: 42, key: "sk-own" });
+  const base = { sealKey: privateKey, apiKey: "sk-server", repos: new Set(["me/*"]), repo: "me/app", owner: me };
+  assert.deepEqual(chooseKey({ ...base, sealed }), { key: "sk-own" });
+  assert.ok("missing" in chooseKey({ ...base, sealed, sealKey: undefined }));
+  assert.ok("missing" in chooseKey({ ...base, sealed: seal(keys().publicKey, { v: 1, owner: "me", owner_id: 42, key: "x" }) }));
+  assert.deepEqual(chooseKey({ ...base, sealed: undefined }), { key: "sk-server" });
+  assert.ok("missing" in chooseKey({ ...base, sealed: undefined, repo: "stranger/app", owner: { login: "stranger", id: 9 } }));
+  assert.ok("missing" in chooseKey({ ...base, sealed: undefined, apiKey: undefined }));
 });
 
 test("sealedKeyOf reads sealed_key from the config, ignoring line breaks", () => {

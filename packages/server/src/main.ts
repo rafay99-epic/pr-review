@@ -14,9 +14,9 @@ import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { type } from "arktype";
 import { createApp, repoApi } from "./github-app.ts";
-import { type ModelKey, publicPem, sealedKeyOf, unseal } from "./model-key.ts";
+import { chooseKey, type ModelKey, publicPem, sealedKeyOf } from "./model-key.ts";
 import { createQueue, type Job, keyOf, type Run } from "./queue.ts";
-import { allowedRepo, toJob, verify } from "./webhook.ts";
+import { toJob, verify } from "./webhook.ts";
 
 const exec = promisify(execFile);
 
@@ -78,15 +78,14 @@ const gitEnv = (token: string) => ({
   GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`,
 });
 
-/**
- * The key a repo's reviews run on: its own sealed key first, then the server's key when REPOS
- * covers the repo. `.reviewpilot.yml` is read from the default branch, so a PR cannot swap it.
- */
-async function modelKey(repo: string, token: string): Promise<ModelKey> {
-  const sealed = sealedKeyOf(await repoApi(token, repo).file(".reviewpilot.yml"));
-  if (sealed) return SEAL_KEY ? unseal(SEAL_KEY, sealed, repo.split("/")[0] ?? "") : { missing: "this server does not accept sealed keys" };
-  if (API_KEY && allowedRepo(REPOS, repo)) return { key: API_KEY };
-  return { missing: "this repository has no model key yet" };
+const RepoOwner = type({ repository: { owner: { login: "string", id: "number" } } });
+
+/** The key for a job's repo. `.reviewpilot.yml` is read from the default branch, so a PR cannot swap it. */
+async function modelKey(job: Job, token: string): Promise<ModelKey> {
+  const owner = RepoOwner(job.payload);
+  if (owner instanceof type.errors) return { missing: "the webhook did not say who owns this repository" };
+  const sealed = sealedKeyOf(await repoApi(token, job.repo).file(".reviewpilot.yml"));
+  return chooseKey({ sealed, sealKey: SEAL_KEY, apiKey: API_KEY, repos: REPOS, repo: job.repo, owner: owner.repository.owner });
 }
 
 /** Runs one review: the clone (made once, reused after), then the action with a fresh token. */
@@ -105,7 +104,7 @@ function run(job: Job): Run {
     const started = Date.now();
     // The key comes first: a repo that has none is never cloned, so installing the App alone
     // cannot fill the volume. It needs only the GitHub API, not the clone.
-    const model = await modelKey(job.repo, await app.token(job.installation));
+    const model = await modelKey(job, await app.token(job.installation));
     if ("missing" in model) {
       say(key, `no model key: ${model.missing}`);
       if (stopped) return;
