@@ -124,7 +124,13 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out seal.pem
 fly secrets set -a <your-app> SEAL_KEY="$(cat seal.pem)"
 ```
 
-The server then publishes the public half at `https://<your-app>.fly.dev/seal-key`. Repositories seal their key with it, exactly as in [Hosted bot, step 3](#hosted), using your URL in the `curl` line. Without `REVIEWPILOT_API_KEY` the server never spends a key of its own.
+The server then publishes the public half at `https://<your-app>.fly.dev/seal-key`. Repositories seal their key with the terminal steps in [Hosted bot, step 3](#hosted), downloading your key instead of the hosted one:
+
+```sh
+curl -s https://<your-app>.fly.dev/seal-key -o seal-key.pem
+```
+
+The form on this site seals for the hosted server only. Without `REVIEWPILOT_API_KEY` the server never spends a key of its own.
 
 ## Settings
 
