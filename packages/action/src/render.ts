@@ -81,10 +81,11 @@ export function blockers(state: State, pass: Score = 5): string {
 /**
  * The ReviewPilot check's result: passes at `pass` (review.pass_score) or above, the score in
  * its title, and each open finding as an annotation on its lines (GitHub takes up to 50 per
- * update). A partial review (files skipped, parts or checks that failed) is never green: a
- * passing score there is neutral.
+ * update). A review that did not finish (parts or checks that failed) never passes: its
+ * score covers only what was read, and `/review` retries it. One that skipped files because
+ * the diff is too large is neutral at a passing score, since a retry would skip them again.
  */
-export function checkResult(state: State, run: Run, summaryUrl: string, partial: boolean, pass: Score = 5): CheckUpdate {
+export function checkResult(state: State, run: Run, summaryUrl: string, partial: false | "skipped" | "incomplete", pass: Score = 5): CheckUpdate {
   const open = state.findings.filter((f) => f.status === "open").sort(bySeverity);
   const annotations: Annotation[] = open.slice(0, 50).map((f) => ({
     path: f.file,
@@ -97,13 +98,14 @@ export function checkResult(state: State, run: Run, summaryUrl: string, partial:
     message: clean(f.body).slice(0, 4000),
   }));
   return {
-    conclusion: state.score < pass ? "failure" : partial ? "neutral" : "success",
+    conclusion: state.score < pass || partial === "incomplete" ? "failure" : partial === "skipped" ? "neutral" : "success",
     details_url: summaryUrl,
     output: {
       title: `${state.score}/5${partial ? " (partial)" : ""} · ${open.length} open · ${duration(run.seconds)}`,
       summary: [
         `**${state.score}/5** on ${run.head.slice(0, 7)}${pass < 5 && state.score >= pass ? ` (passes at ${pass}/5)` : ""}. [Full summary](${summaryUrl}).`,
         ...(blockers(state, pass) ? ["", blockers(state, pass)] : []),
+        ...(partial === "incomplete" ? ["", "**The review did not finish**, so it cannot pass: part of the diff or some checks failed. Comment `/review` to retry."] : []),
         ...(run.warning ? ["", `> ${run.warning}`] : []),
         ...(open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : []),
         "",

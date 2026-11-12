@@ -293,7 +293,11 @@ test("the check passes only at 5/5 and annotates each open finding", () => {
   const many = checkResult({ head: "h", score: 4, findings: Array.from({ length: 60 }, (_, i) => finding(i + 1, "minor")) }, run, "u", false);
   assert.equal(many.output?.annotations?.length, 50);
   assert.match(many.output?.summary ?? "", /10 more open findings/);
-  const partial = checkResult({ head: "h", score: 5, findings: [] }, run, "u", true);
+  // Too large to read whole: neutral. Did not finish (a part or check failed): never passes.
+  const partial = checkResult({ head: "h", score: 5, findings: [] }, run, "u", "skipped");
   assert.equal(partial.conclusion, "neutral");
   assert.match(partial.output?.title ?? "", /5\/5 \(partial\)/);
+  const unfinished = checkResult({ head: "h", score: 5, findings: [] }, run, "u", "incomplete");
+  assert.equal(unfinished.conclusion, "failure");
+  assert.match(unfinished.output?.summary ?? "", /did not finish/);
 });

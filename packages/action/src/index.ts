@@ -433,7 +433,7 @@ async function main() {
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
 
       // Files skipped, parts that failed, or candidates whose check failed: not a full review.
-      const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
+      const partial = failedParts > 0 || checked.some((c) => !c.verdict) ? "incomplete" : skipped > 0 ? "skipped" : false;
       const result = checkResult(state, run, `https://github.com/${repo}/pull/${number}#issuecomment-${summaryId}`, partial, config.review.pass_score);
       // One bad annotation fails the whole update; the check must not stay "in progress".
       const finished = checkId !== undefined && (await gh.updateCheck(checkId, { status: "completed", completed_at: new Date().toISOString(), ...result }).then(() => true, () => false));

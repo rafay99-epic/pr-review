@@ -42,8 +42,19 @@ export async function runAgent<T>(opts: {
         content: `You are out of time. Call ${name} now with what you have so far.`,
       });
     }
-    // Once out of budget, only the submit tool is offered and the call is forced.
-    const reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : undefined, opts.deadline);
+    // Once out of budget, only the submit tool is offered and the call is forced. A normal turn
+    // cut off by the deadline does not lose the part: the agent goes straight to the forced
+    // submission with what it has read so far.
+    let reply: Extract<Message, { role: "assistant" }>;
+    try {
+      reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : undefined, opts.deadline);
+    } catch (e) {
+      if (warned || Date.now() < opts.deadline - 5_000) throw e;
+      opts.log(`turn cut off at the deadline, submitting: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+      warned = true;
+      messages.push({ role: "user", content: `You are out of time. Call ${name} now with what you have so far.` });
+      continue;
+    }
     messages.push(reply);
 
     const calls = reply.tool_calls ?? [];

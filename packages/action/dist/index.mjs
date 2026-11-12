@@ -16529,8 +16529,9 @@ function createLlm(opts) {
           // "none" leaves the parameter out, for providers that reject it.
           ...sendEffort ? { reasoning_effort: opts.effort } : {}
         }),
-        // At least 60s even past the deadline: the forced final call must still get an answer.
-        signal: AbortSignal.timeout(Math.max(6e4, Math.min(opts.timeoutMs ?? 24e4, left())))
+        // Never past the deadline for a normal turn (at least 60s), but the forced final call gets
+        // two minutes even past it: that answer is the part's whole result.
+        signal: AbortSignal.timeout(Math.max(force ? 12e4 : 6e4, Math.min(opts.timeoutMs ?? 24e4, left())))
       }).catch((e) => ({ ok: false, status: 0, error: e }));
       const retryable = !res.ok && (res.status === 0 || res.status === 429 || res.status >= 500);
       if (retryable && attempt < 4 && left() > 15e3) {
@@ -16689,13 +16690,14 @@ function checkResult(state, run2, summaryUrl, partial, pass = 5) {
     message: clean(f.body).slice(0, 4e3)
   }));
   return {
-    conclusion: state.score < pass ? "failure" : partial ? "neutral" : "success",
+    conclusion: state.score < pass || partial === "incomplete" ? "failure" : partial === "skipped" ? "neutral" : "success",
     details_url: summaryUrl,
     output: {
       title: `${state.score}/5${partial ? " (partial)" : ""} \xB7 ${open.length} open \xB7 ${duration(run2.seconds)}`,
       summary: [
         `**${state.score}/5** on ${run2.head.slice(0, 7)}${pass < 5 && state.score >= pass ? ` (passes at ${pass}/5)` : ""}. [Full summary](${summaryUrl}).`,
         ...blockers(state, pass) ? ["", blockers(state, pass)] : [],
+        ...partial === "incomplete" ? ["", "**The review did not finish**, so it cannot pass: part of the diff or some checks failed. Comment `/review` to retry."] : [],
         ...run2.warning ? ["", `> ${run2.warning}`] : [],
         ...open.length > annotations.length ? ["", `${open.length - annotations.length} more open findings are in the summary.`] : [],
         "",
@@ -16890,7 +16892,16 @@ async function runAgent(opts) {
         content: `You are out of time. Call ${name} now with what you have so far.`
       });
     }
-    const reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : void 0, opts.deadline);
+    let reply;
+    try {
+      reply = await llm.chat(messages, warned ? [submit.spec] : tools, warned ? name : void 0, opts.deadline);
+    } catch (e) {
+      if (warned || Date.now() < opts.deadline - 5e3) throw e;
+      opts.log(`turn cut off at the deadline, submitting: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+      warned = true;
+      messages.push({ role: "user", content: `You are out of time. Call ${name} now with what you have so far.` });
+      continue;
+    }
     messages.push(reply);
     const calls = reply.tool_calls ?? [];
     if (!calls.length) {
@@ -17594,7 +17605,7 @@ ${summaryBody(state, prev, outside, run2, config.review.pass_score)}`);
         if (!resolved) unresolved += 1;
       });
       if (unresolved) log.line(`${unresolved} fixed threads collapsed but left unresolved: resolving needs Contents write on the token.`);
-      const partial = skipped > 0 || failedParts > 0 || checked.some((c) => !c.verdict);
+      const partial = failedParts > 0 || checked.some((c) => !c.verdict) ? "incomplete" : skipped > 0 ? "skipped" : false;
       const result = checkResult(state, run2, `https://github.com/${repo}/pull/${number2}#issuecomment-${summaryId}`, partial, config.review.pass_score);
       const finished = checkId !== void 0 && await gh.updateCheck(checkId, { status: "completed", completed_at: (/* @__PURE__ */ new Date()).toISOString(), ...result }).then(() => true, () => false);
       if (checkId !== void 0 && !finished && result.output) await finishCheck({ ...result, output: { ...result.output, annotations: [] } });
